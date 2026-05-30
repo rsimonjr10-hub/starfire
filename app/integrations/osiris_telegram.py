@@ -26,16 +26,6 @@ logger = structlog.get_logger(__name__)
 _TG_API = "https://api.telegram.org"
 
 
-def _normalize_chat_id(chat_id: Optional[str]) -> Optional[str]:
-    """Telegram web URLs show supergroup IDs without the -100 prefix. Fix it."""
-    if not chat_id:
-        return None
-    s = chat_id.strip()
-    # Supergroup IDs are large negatives. Web hash drops the '100' after the minus.
-    # e.g. web shows -5001956862 but API needs -1005001956862
-    if s.startswith("-") and not s.startswith("-100") and len(s) >= 10:
-        return "-100" + s[1:]
-    return s
 
 
 class OsirisTelegramBridge:
@@ -50,8 +40,7 @@ class OsirisTelegramBridge:
 
     @property
     def _chat_id(self) -> Optional[str]:
-        raw = settings.osiris_telegram_chat_id or None
-        return _normalize_chat_id(raw)
+        return settings.osiris_telegram_chat_id or None
 
     def is_available(self) -> bool:
         return bool(self._starfire_token and self._chat_id)

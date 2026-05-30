@@ -23,16 +23,6 @@ logger = structlog.get_logger(__name__)
 _TG_API = "https://api.telegram.org"
 
 
-def _normalize_chat_id(chat_id: Optional[str]) -> Optional[str]:
-    """Telegram web URLs show supergroup IDs without the -100 prefix. Fix it."""
-    if not chat_id:
-        return None
-    s = str(chat_id).strip()
-    if s.startswith("-") and not s.startswith("-100") and len(s) >= 10:
-        return "-100" + s[1:]
-    return s
-
-
 class LumisnovaTelegramBridge:
 
     @property
@@ -45,7 +35,7 @@ class LumisnovaTelegramBridge:
 
     @property
     def _chat_id(self) -> Optional[str]:
-        return _normalize_chat_id(settings.lumisnova_telegram_chat_id or None)
+        return settings.lumisnova_telegram_chat_id or None
 
     def is_available(self) -> bool:
         return bool(self._lumisnova_token)
