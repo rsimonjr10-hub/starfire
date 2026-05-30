@@ -1,8 +1,7 @@
-import asyncio
+import urllib.parse
 from logging.config import fileConfig
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 
 from app.config import settings
@@ -10,12 +9,24 @@ from app.database import Base
 import app.models  # noqa: F401 — ensures all models are registered
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+
+def _migration_url() -> str:
+    """Return sync psycopg2 URL with SSL disabled for Railway TCP proxy."""
+    url = settings.sync_database_url
+    parsed = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    qs["sslmode"] = ["disable"]
+    new_query = urllib.parse.urlencode(qs, doseq=True)
+    return parsed._replace(query=new_query).geturl()
+
+
+config.set_main_option("sqlalchemy.url", _migration_url())
 
 
 def run_migrations_offline() -> None:
@@ -36,19 +47,10 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    connectable = create_async_engine(
-        settings.database_url,
-        poolclass=pool.NullPool,
-        connect_args={"ssl": False},
-    )
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
-
-
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    engine = create_engine(_migration_url(), poolclass=pool.NullPool)
+    with engine.connect() as connection:
+        do_run_migrations(connection)
 
 
 if context.is_offline_mode():
