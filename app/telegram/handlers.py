@@ -326,18 +326,17 @@ class TelegramHandlers:
         if not settings.google_client_id:
             await update.message.reply_text(
                 "Google OAuth is not configured yet. The bot admin needs to set "
-                "GOOGLE\\_CLIENT\\_ID and GOOGLE\\_CLIENT\\_SECRET in Railway.",
-                parse_mode=ParseMode.MARKDOWN,
+                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Railway.",
             )
             return
         auth_url = f"{_OAUTH_BASE}/auth/google?telegram_id={user.telegram_id}"
         await update.message.reply_text(
-            f"*Connect Google Account*\n\n"
+            f"<b>Connect Google Account</b>\n\n"
             f"Tap the link below to authorize STARFIRE to access your Gmail and Drive:\n\n"
-            f"{auth_url}\n\n"
-            f"_This gives STARFIRE read/send access to your Gmail and read/write access to Drive. "
-            f"Your credentials are stored securely in the database._",
-            parse_mode=ParseMode.MARKDOWN,
+            f'<a href="{auth_url}">Authorize STARFIRE → Google</a>\n\n'
+            f"<i>This gives STARFIRE read/send access to Gmail and read/write access to Drive. "
+            f"Your credentials are stored securely in the database.</i>",
+            parse_mode=ParseMode.HTML,
         )
 
     async def cmd_inbox(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
