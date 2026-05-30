@@ -56,6 +56,12 @@ class OsirisTelegramBridge:
     def is_available(self) -> bool:
         return bool(self._starfire_token and self._chat_id)
 
+    @property
+    def _post_token(self) -> str:
+        """Use OSIRIS token to post if available (it's already in Argus Tower).
+        Fall back to STARFIRE token if not set."""
+        return self._osiris_token or self._starfire_token
+
     async def send_command(
         self,
         command: str,
@@ -63,8 +69,8 @@ class OsirisTelegramBridge:
         user_telegram_id: Optional[int] = None,
     ) -> bool:
         """
-        Send a structured command to osiris_prime_bot's group chat.
-        osiris_prime_bot reads the message and acts on it.
+        Send a structured command to the Argus Tower group.
+        Uses OSIRIS bot token so it can post without @starfire5_bot being in the group.
         """
         if not self.is_available():
             return False
@@ -78,7 +84,7 @@ class OsirisTelegramBridge:
         if user_telegram_id:
             text += f"\nRoute reply to user: {user_telegram_id}"
 
-        return await self._send(self._starfire_token, self._chat_id, text)
+        return await self._send(self._post_token, self._chat_id, text)
 
     async def send_trade_order(
         self,
