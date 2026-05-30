@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.routers import webhook, portfolio, trades, goals
+from app.routers import webhook, portfolio, trades, goals, admin
 from app.workers.market_worker import MarketWorker
 from app.workers.event_worker import EventWorker
 from app.workers.report_worker import ReportWorker
@@ -97,6 +97,7 @@ app.include_router(webhook.router)
 app.include_router(portfolio.router)
 app.include_router(trades.router)
 app.include_router(goals.router)
+app.include_router(admin.router)
 
 
 @app.get("/")

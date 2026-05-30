@@ -17,6 +17,8 @@ from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
 from app.integrations.lumiscapital import lumiscapital, formatter
+from app.integrations.lumiscapital_bridge import lumiscapital_bridge
+from app.integrations.osiris_bridge import osiris_bridge
 
 logger = structlog.get_logger(__name__)
 
@@ -299,6 +301,24 @@ class DecisionEngine:
             intent_payload=action,
         )
 
+        # Use external OSIRIS service if configured, otherwise local executor
+        if osiris_bridge.is_available():
+            execution = await osiris_bridge.execute_trade(
+                user_id=user.id,
+                symbol=symbol,
+                side=side,
+                size_pct=size_pct,
+                intent_payload=action,
+            )
+        else:
+            execution = await self.osiris.execute_trade(
+                user_id=user.id,
+                symbol=symbol,
+                side=side,
+                size_pct=size_pct,
+                intent_payload=action,
+            )
+
         if execution["status"] == "FILLED":
             await self.publisher.publish(
                 "PORTFOLIO_EVENT",
@@ -310,8 +330,9 @@ class DecisionEngine:
                     "filled_price": execution["filled_price"],
                 },
             )
+            source = "OSIRIS (external)" if osiris_bridge.is_available() else "OSIRIS"
             return (
-                f"Trade executed by OSIRIS.\n"
+                f"Trade executed by {source}.\n"
                 f"Symbol: {symbol}\n"
                 f"Side: {side}\n"
                 f"Filled at: ${execution['filled_price']:,.4f}\n"

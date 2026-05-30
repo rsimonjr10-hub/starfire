@@ -30,6 +30,11 @@ class Settings(BaseSettings):
 
     fmp_api_key: str = ""
 
+    # Inter-service communication (Railway private network)
+    lumiscapital_service_url: str = ""     # e.g. http://lumisnovacapital-bot.railway.internal:8001
+    osiris_service_url: str = ""           # e.g. http://osiris.railway.internal:8002
+    inter_service_secret: str = "change-me-inter-service-secret"
+
     google_drive_credentials_json: Optional[str] = None
     google_drive_token_json: Optional[str] = None
 
