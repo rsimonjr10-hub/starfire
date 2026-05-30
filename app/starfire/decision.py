@@ -35,6 +35,7 @@ GOOGLE_ACTIONS = {
     "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC",
     "GET_CALENDAR", "CREATE_EVENT",
     "UPDATE_SHEET", "GET_SHEET_PL",
+    "CREATE_SHEET", "DELETE_SHEET_ROW", "DELETE_SHEET",
 }
 
 
@@ -540,17 +541,30 @@ class DecisionEngine:
         if action_type in ("UPDATE_SHEET", "GET_SHEET_PL"):
             if not self._google_connected(user):
                 return "Google not connected. Use /connect_google."
-            sheet_id = action.get("sheet_id") or (user.preferences or {}).get("options_sheet_id")
+
+            sheets = self._sheets(user)
+            tab = action.get("tab")
+
+            # Resolve the target spreadsheet: explicit id > name lookup > saved default
+            sheet_id = action.get("sheet_id")
+            sheet_name = action.get("sheet_name")
+            if not sheet_id and sheet_name:
+                sheet_id = sheets.find_spreadsheet_by_name(sheet_name)
+                if not sheet_id:
+                    return f"Couldn't find a Google Sheet named *{sheet_name}* in your Drive."
+            if not sheet_id:
+                sheet_id = (user.preferences or {}).get("options_sheet_id")
             if not sheet_id:
                 return (
                     "No P/L sheet linked.\n"
-                    "Use `/setsheet [Google Sheet ID]` — find the ID in your sheet URL."
+                    "Either name it (\"log this to my Options sheet\") or use "
+                    "`/setsheet [name or Sheet ID]`."
                 )
+
             try:
-                sheets = self._sheets(user)
                 if action_type == "GET_SHEET_PL":
                     date_prefix = action.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-                    records = sheets.get_pl_summary(sheet_id, date_prefix)
+                    records = sheets.get_pl_summary(sheet_id, date_prefix, tab=tab)
                     if not records:
                         return f"No P/L entries found for {date_prefix}."
                     total = sum(float(r.get("pl", 0) or 0) for r in records)
@@ -573,18 +587,111 @@ class DecisionEngine:
                 pl = float(action.get("pl", round((exit_price - entry) * contracts * 100, 2)))
                 notes = action.get("notes", "")
 
-                ok = sheets.append_pl_row(sheet_id, date, symbol, trade_type, entry, exit_price, contracts, pl, notes)
+                ok = sheets.append_pl_row(
+                    sheet_id, date, symbol, trade_type, entry, exit_price,
+                    contracts, pl, notes, tab=tab,
+                )
                 if ok:
                     sign = "+" if pl >= 0 else ""
+                    where = f" → tab *{tab}*" if tab else ""
                     return (
-                        f"P/L logged to sheet:\n"
+                        f"P/L logged to sheet{where}:\n"
                         f"*{symbol.upper()}* {trade_type.upper()}\n"
                         f"Entry: `${entry}` → Exit: `${exit_price}` | {contracts} contract{'s' if contracts != 1 else ''}\n"
                         f"P/L: `{sign}${pl:,.2f}`"
                     )
-                return "Failed to update sheet. Check the sheet ID and that STARFIRE has edit access."
+                return "Failed to update sheet. Check the name/tab and that STARFIRE has edit access."
             except Exception as e:
                 logger.error("sheets_error", action=action_type, error=str(e))
+                return f"Sheets error: {e}"
+
+        # CREATE_SHEET — make a new spreadsheet
+        if action_type == "CREATE_SHEET":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            title = action.get("title") or action.get("name", "")
+            if not title:
+                return "What should I name the new sheet?"
+            try:
+                sheets = self._sheets(user)
+                result = sheets.create_spreadsheet(
+                    title=title,
+                    tab=action.get("tab"),
+                    with_headers=action.get("pl_template", True),
+                )
+                if not result:
+                    return "Failed to create the sheet."
+                # Link as the default P/L sheet if none set, or if asked
+                prefs = dict(user.preferences or {})
+                if action.get("set_default") or not prefs.get("options_sheet_id"):
+                    prefs["options_sheet_id"] = result["id"]
+                    user.preferences = prefs
+                    linked = "\n_Linked as your default P/L sheet._"
+                else:
+                    linked = ""
+                return (
+                    f"Created sheet *{title}*\n"
+                    f"[Open]({result['url']})"
+                    f"{linked}"
+                )
+            except Exception as e:
+                logger.error("create_sheet_error", error=str(e))
+                return f"Sheets error: {e}"
+
+        # DELETE_SHEET_ROW — remove matching P/L rows
+        if action_type == "DELETE_SHEET_ROW":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            sheets = self._sheets(user)
+            sheet_id = action.get("sheet_id")
+            if not sheet_id and action.get("sheet_name"):
+                sheet_id = sheets.find_spreadsheet_by_name(action["sheet_name"])
+                if not sheet_id:
+                    return f"Couldn't find a sheet named *{action['sheet_name']}*."
+            sheet_id = sheet_id or (user.preferences or {}).get("options_sheet_id")
+            if not sheet_id:
+                return "No P/L sheet linked. Use `/setsheet [name or ID]`."
+            symbol = action.get("symbol")
+            date = action.get("date")
+            if not symbol and not date:
+                return "Tell me which rows to remove — by symbol, date, or both."
+            try:
+                removed = sheets.delete_rows_matching(
+                    sheet_id, symbol=symbol, date=date, tab=action.get("tab"),
+                )
+                if removed:
+                    crit = ", ".join(filter(None, [symbol, date]))
+                    return f"Removed {removed} row{'s' if removed != 1 else ''} ({crit}) from the sheet."
+                return "No matching rows found to remove."
+            except Exception as e:
+                logger.error("delete_sheet_row_error", error=str(e))
+                return f"Sheets error: {e}"
+
+        # DELETE_SHEET — trash an entire spreadsheet
+        if action_type == "DELETE_SHEET":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            sheets = self._sheets(user)
+            sheet_id = action.get("sheet_id")
+            sheet_name = action.get("sheet_name")
+            if not sheet_id and sheet_name:
+                sheet_id = sheets.find_spreadsheet_by_name(sheet_name)
+                if not sheet_id:
+                    return f"Couldn't find a sheet named *{sheet_name}*."
+            if not sheet_id:
+                return "Which sheet should I delete? Give me a name."
+            try:
+                ok = sheets.trash_spreadsheet(sheet_id)
+                if ok:
+                    prefs = dict(user.preferences or {})
+                    if prefs.get("options_sheet_id") == sheet_id:
+                        prefs.pop("options_sheet_id", None)
+                        user.preferences = prefs
+                    label = sheet_name or sheet_id
+                    return f"Moved *{label}* to Drive trash (recoverable for 30 days)."
+                return "Failed to delete the sheet. Check STARFIRE has access."
+            except Exception as e:
+                logger.error("delete_sheet_error", error=str(e))
                 return f"Sheets error: {e}"
 
         return "Done."

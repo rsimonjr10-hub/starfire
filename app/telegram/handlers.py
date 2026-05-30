@@ -756,19 +756,44 @@ class TelegramHandlers:
         await self._run_brain(update, "Add to calendar: " + " ".join(args))
 
     async def cmd_setsheet(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Link a Google Sheet for options P/L tracking."""
+        """Link a Google Sheet for options P/L tracking — by ID or by name."""
         args = context.args or []
         if not args:
             await update.message.reply_text(
-                "Usage: `/setsheet [Google Sheet ID]`\n"
-                "Find it in your sheet URL:\n"
-                "`docs.google.com/spreadsheets/d/*[SHEET\\_ID]*/edit`",
+                "Usage: `/setsheet [name or Google Sheet ID]`\n"
+                "Examples:\n"
+                "`/setsheet Options P/L`  — finds it by name in your Drive\n"
+                "`/setsheet 1BxiMVs0XRA...`  — the ID from the sheet URL",
                 parse_mode=ParseMode.MARKDOWN,
             )
             return
 
-        sheet_id = args[0].strip()
         user = await self._get_or_create_user(update)
+        raw = " ".join(args).strip()
+
+        # A single token with no spaces and 30+ chars is almost certainly an ID.
+        looks_like_id = len(args) == 1 and " " not in raw and len(raw) >= 30
+        sheet_id = raw
+        display = raw
+
+        if not looks_like_id:
+            if not user.google_token_json:
+                await update.message.reply_text(
+                    "To look up a sheet by name I need Google access. Use /connect_google first, "
+                    "or pass the Sheet ID directly.",
+                )
+                return
+            await update.message.chat.send_action("typing")
+            from app.integrations.gmail_service import SheetsService
+            resolved = SheetsService(user.google_token_json).find_spreadsheet_by_name(raw)
+            if not resolved:
+                await update.message.reply_text(
+                    f"Couldn't find a Google Sheet named \"{raw}\" in your Drive. "
+                    f"Check the name or paste the Sheet ID instead.",
+                )
+                return
+            sheet_id = resolved
+            display = f"{raw} (`{resolved}`)"
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(User).where(User.id == user.id))
@@ -779,8 +804,7 @@ class TelegramHandlers:
             await session.commit()
 
         await update.message.reply_text(
-            f"Options P/L sheet linked.\n"
-            f"Sheet ID: `{sheet_id}`\n\n"
+            f"Options P/L sheet linked: {display}\n\n"
             f"Tell me: _\"Update my P/L: sold 10 AAPL calls, entry $2.50, exit $3.75\"_ and I'll log it.",
             parse_mode=ParseMode.MARKDOWN,
         )

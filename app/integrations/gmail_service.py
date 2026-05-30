@@ -296,13 +296,182 @@ class CalendarService:
 
 class SheetsService:
     # Expected columns: Date | Symbol | Type | Entry | Exit | Contracts | P/L | Notes
-    RANGE = "Sheet1!A:H"
+    HEADERS = ["Date", "Symbol", "Type", "Entry", "Exit", "Contracts", "P/L", "Notes"]
+    DEFAULT_TAB = "Sheet1"
 
     def __init__(self, token_json: str):
         self._token_json = token_json
 
     def _svc(self):
         return get_sheets_service(self._token_json)
+
+    @staticmethod
+    def _range(tab: Optional[str]) -> str:
+        tab = tab or SheetsService.DEFAULT_TAB
+        # Quote tab names that contain spaces or special chars
+        quoted = f"'{tab}'" if not tab.isidentifier() else tab
+        return f"{quoted}!A:H"
+
+    def create_spreadsheet(
+        self,
+        title: str,
+        tab: Optional[str] = None,
+        with_headers: bool = True,
+    ) -> Optional[dict]:
+        """Create a new spreadsheet. Returns {id, url}."""
+        try:
+            body: dict = {"properties": {"title": title}}
+            if tab:
+                body["sheets"] = [{"properties": {"title": tab}}]
+            ss = self._svc().spreadsheets().create(
+                body=body, fields="spreadsheetId,spreadsheetUrl",
+            ).execute()
+            sid = ss["spreadsheetId"]
+            if with_headers:
+                self.ensure_headers(sid, tab)
+            return {"id": sid, "url": ss.get("spreadsheetUrl", "")}
+        except Exception as e:
+            logger.error("sheets_create_error", title=title, error=str(e))
+            return None
+
+    def add_tab(self, spreadsheet_id: str, tab: str, with_headers: bool = True) -> bool:
+        """Add a new tab (worksheet) to an existing spreadsheet."""
+        try:
+            self._svc().spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
+            ).execute()
+            if with_headers:
+                self.ensure_headers(spreadsheet_id, tab)
+            return True
+        except Exception as e:
+            logger.error("sheets_add_tab_error", tab=tab, error=str(e))
+            return False
+
+    def _grid_id(self, spreadsheet_id: str, tab: Optional[str]) -> Optional[int]:
+        tab = tab or self.DEFAULT_TAB
+        try:
+            meta = self._svc().spreadsheets().get(
+                spreadsheetId=spreadsheet_id, fields="sheets.properties",
+            ).execute()
+            for s in meta.get("sheets", []):
+                if s["properties"]["title"] == tab:
+                    return s["properties"]["sheetId"]
+        except Exception as e:
+            logger.error("sheets_grid_id_error", error=str(e))
+        return None
+
+    def delete_rows_matching(
+        self,
+        spreadsheet_id: str,
+        symbol: Optional[str] = None,
+        date: Optional[str] = None,
+        tab: Optional[str] = None,
+    ) -> int:
+        """Delete data rows matching symbol and/or date prefix. Returns count removed."""
+        try:
+            grid_id = self._grid_id(spreadsheet_id, tab)
+            if grid_id is None:
+                return 0
+            rows = self._svc().spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id, range=self._range(tab),
+            ).execute().get("values", [])
+
+            to_delete = []
+            for i, row in enumerate(rows):
+                if i == 0:  # header row
+                    continue
+                padded = row + [""] * (8 - len(row))
+                r_date, r_symbol = padded[0], padded[1]
+                if symbol and r_symbol.upper() != symbol.upper():
+                    continue
+                if date and not str(r_date).startswith(date):
+                    continue
+                to_delete.append(i)  # 0-based grid row index
+
+            if not to_delete:
+                return 0
+
+            # Delete bottom-up so earlier indices stay valid
+            requests = [
+                {"deleteDimension": {"range": {
+                    "sheetId": grid_id, "dimension": "ROWS",
+                    "startIndex": idx, "endIndex": idx + 1,
+                }}}
+                for idx in sorted(to_delete, reverse=True)
+            ]
+            self._svc().spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body={"requests": requests},
+            ).execute()
+            return len(to_delete)
+        except Exception as e:
+            logger.error("sheets_delete_rows_error", error=str(e))
+            return 0
+
+    def trash_spreadsheet(self, spreadsheet_id: str) -> bool:
+        """Move a spreadsheet to Drive trash (recoverable for 30 days)."""
+        try:
+            drive = get_drive_service(self._token_json)
+            drive.files().update(fileId=spreadsheet_id, body={"trashed": True}).execute()
+            return True
+        except Exception as e:
+            logger.error("sheets_trash_error", error=str(e))
+            return False
+
+    def find_spreadsheet_by_name(self, name: str) -> Optional[str]:
+        """Resolve a spreadsheet ID from its name via Drive search."""
+        try:
+            drive = get_drive_service(self._token_json)
+            safe = name.replace("'", "\\'")
+            res = drive.files().list(
+                q=(
+                    "mimeType='application/vnd.google-apps.spreadsheet' "
+                    f"and name contains '{safe}' and trashed=false"
+                ),
+                pageSize=10,
+                orderBy="modifiedTime desc",
+                fields="files(id, name)",
+            ).execute()
+            files = res.get("files", [])
+            if not files:
+                return None
+            # Prefer an exact (case-insensitive) name match
+            for f in files:
+                if f.get("name", "").lower() == name.lower():
+                    return f["id"]
+            return files[0]["id"]
+        except Exception as e:
+            logger.error("sheets_find_error", name=name, error=str(e))
+            return None
+
+    def list_tabs(self, spreadsheet_id: str) -> list[str]:
+        """Return the tab (worksheet) names in a spreadsheet."""
+        try:
+            meta = self._svc().spreadsheets().get(
+                spreadsheetId=spreadsheet_id,
+                fields="sheets.properties.title",
+            ).execute()
+            return [s["properties"]["title"] for s in meta.get("sheets", [])]
+        except Exception as e:
+            logger.error("sheets_list_tabs_error", error=str(e))
+            return []
+
+    def ensure_headers(self, spreadsheet_id: str, tab: Optional[str] = None) -> None:
+        """Write the P/L header row if the tab's first row is empty."""
+        try:
+            rng = self._range(tab)
+            existing = self._svc().spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id, range=rng,
+            ).execute().get("values", [])
+            if not existing:
+                self._svc().spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=self._range(tab).replace(":H", "1:H1"),
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [self.HEADERS]},
+                ).execute()
+        except Exception as e:
+            logger.error("sheets_ensure_headers_error", error=str(e))
 
     def append_pl_row(
         self,
@@ -315,12 +484,14 @@ class SheetsService:
         contracts: int,
         pl: float,
         notes: str = "",
+        tab: Optional[str] = None,
     ) -> bool:
         try:
+            self.ensure_headers(spreadsheet_id, tab)
             values = [[date, symbol.upper(), trade_type.upper(), entry, exit_price, contracts, pl, notes]]
             self._svc().spreadsheets().values().append(
                 spreadsheetId=spreadsheet_id,
-                range=self.RANGE,
+                range=self._range(tab),
                 valueInputOption="USER_ENTERED",
                 body={"values": values},
             ).execute()
@@ -329,11 +500,16 @@ class SheetsService:
             logger.error("sheets_append_error", error=str(e))
             return False
 
-    def get_pl_summary(self, spreadsheet_id: str, date_prefix: Optional[str] = None) -> list[dict]:
+    def get_pl_summary(
+        self,
+        spreadsheet_id: str,
+        date_prefix: Optional[str] = None,
+        tab: Optional[str] = None,
+    ) -> list[dict]:
         try:
             result = self._svc().spreadsheets().values().get(
                 spreadsheetId=spreadsheet_id,
-                range=self.RANGE,
+                range=self._range(tab),
             ).execute()
             rows = result.get("values", [])
             if len(rows) <= 1:
