@@ -153,7 +153,15 @@ class DecisionEngine:
                 "Would you like to adjust the parameters?"
             )
 
-        # Send to OSIRIS via Telegram bridge first (primary)
+        # Notify user in their OSIRIS private chat so OSIRIS sees the order
+        osiris_msg = (
+            f"STARFIRE ROUTE → {side} {symbol}\n"
+            f"Size: {size_pct}%{f' | Qty: {quantity}' if quantity else ''}\n"
+            f"Authorized by STARFIRE. Execute?"
+        )
+        await osiris_telegram.send_as_osiris(user.telegram_id, osiris_msg)
+
+        # Also post command to Argus Tower group
         tg_sent = await osiris_telegram.send_trade_order(
             user_telegram_id=user.telegram_id,
             symbol=symbol,
@@ -162,7 +170,7 @@ class DecisionEngine:
             extra={"quantity": quantity, "intent": action},
         )
 
-        # Also attempt HTTP bridge if configured
+        # HTTP bridge if configured
         if osiris_bridge.is_available():
             execution = await osiris_bridge.execute_trade(
                 user_id=user.id,
