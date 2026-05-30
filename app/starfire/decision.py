@@ -179,13 +179,26 @@ class DecisionEngine:
     ) -> str:
         query = action.get("query", "portfolio_summary")
 
-        # Route via Telegram if configured
+        # Notify group and send portfolio summary via @Lumiscapital_bot
         if lumisnova_telegram.is_available():
-            sent = await lumisnova_telegram.query(query, action, user.telegram_id)
-            if sent:
-                return f"Query sent to LUMISNOVA (@lumisnovacapital_bot).\n_They will reply in your channel with: {query}_"
+            await lumisnova_telegram.notify_command(query, action, user.telegram_id)
+            if "portfolio" in query:
+                result = await self.db.execute(
+                    select(PortfolioState).where(PortfolioState.user_id == user.id)
+                    .order_by(PortfolioState.snapshot_at.desc()).limit(1)
+                )
+                portfolio = result.scalar_one_or_none()
+                if portfolio:
+                    summary = (
+                        f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
+                        f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
+                        f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)"
+                    )
+                    await lumisnova_telegram.send_portfolio_summary(user.telegram_id, summary)
+                    return "Portfolio summary sent via LUMISNOVA."
+            return f"Query routed to LUMISNOVA: _{query}_"
 
-        # Fallback: serve what we can from direct FMP
+        # Fallback: serve from direct FMP / local DB
         if "portfolio" in query:
             result = await self.db.execute(
                 select(PortfolioState).where(PortfolioState.user_id == user.id)
@@ -198,14 +211,11 @@ class DecisionEngine:
                     f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
                     f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
                     f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)\n\n"
-                    f"_Connect LUMISNOVA for live portfolio data: set LUMISNOVA\\_TELEGRAM\\_CHAT\\_ID in Railway._"
+                    f"_Connect LUMISNOVA for live portfolio data._"
                 )
-            return "No portfolio data yet. Connect LUMISNOVA for live tracking."
+            return "No portfolio data yet."
 
-        return (
-            f"LUMISNOVA not connected.\n"
-            f"Set `LUMISNOVA_TELEGRAM_CHAT_ID` in Railway to route financial queries to @lumisnovacapital_bot."
-        )
+        return "LUMISNOVA not connected. Set `LUMISNOVA_BOT_TOKEN` in Railway."
 
     # ─────────────────────────────────────────────────────────────────────
     # MARKET DATA — direct FMP (GET_* actions)
@@ -226,9 +236,17 @@ class DecisionEngine:
             "You just fetched this data. Give a concise analysis and key takeaways.",
             history, data_context,
         )
+        full_response = formatted
         if analysis["type"] == "chat" and analysis["content"].strip():
-            return formatted + "\n\n---\n" + analysis["content"]
-        return formatted
+            full_response = formatted + "\n\n---\n" + analysis["content"]
+
+        # Deliver via @Lumiscapital_bot when available — data appears to come from LUMISNOVA
+        if lumisnova_telegram.is_available() and user.telegram_id:
+            sent = await lumisnova_telegram.send_market_data(user.telegram_id, action_type, full_response)
+            if sent:
+                return f"_Data delivered via LUMISNOVA._"
+
+        return full_response
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
         try:

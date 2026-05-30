@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     osiris_bot_token: str = ""
     osiris_telegram_chat_id: str = ""
 
-    # LUMISNOVA Telegram bridge (@lumisnovacapital_bot)
-    lumisnova_telegram_chat_id: str = ""  # group where lumisnovacapital_bot listens
+    # LUMISNOVA Telegram bridge (@Lumiscapital_bot)
+    lumisnova_bot_token: str = ""         # @Lumiscapital_bot token — sends data as LUMISNOVA
+    lumisnova_telegram_chat_id: str = ""  # group chat_id where both bots are present
 
     google_client_id: str = ""
     google_client_secret: str = ""
