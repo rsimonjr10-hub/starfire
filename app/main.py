@@ -58,6 +58,13 @@ async def lifespan(app: FastAPI):
     market_task.cancel()
     event_task.cancel()
     report_task.cancel()
+    # Shut down telegram application cleanly
+    try:
+        from app.telegram.bot import get_application
+        tg_app = await get_application()
+        await tg_app.shutdown()
+    except Exception:
+        pass
     logger.info("starfire_shutdown")
 
 

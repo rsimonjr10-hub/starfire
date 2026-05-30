@@ -40,6 +40,7 @@ async def get_application() -> Application:
         _application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
         )
+        await _application.initialize()
     return _application
 
 
