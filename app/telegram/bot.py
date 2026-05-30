@@ -26,6 +26,17 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("goals", handlers.cmd_goals))
         _application.add_handler(CommandHandler("risk", handlers.cmd_risk))
         _application.add_handler(CommandHandler("help", handlers.cmd_help))
+        # Lumiscapital / FMP intelligence commands
+        _application.add_handler(CommandHandler("price", handlers.cmd_price))
+        _application.add_handler(CommandHandler("macro", handlers.cmd_macro))
+        _application.add_handler(CommandHandler("earnings", handlers.cmd_earnings))
+        _application.add_handler(CommandHandler("sectors", handlers.cmd_sectors))
+        _application.add_handler(CommandHandler("news", handlers.cmd_news))
+        _application.add_handler(CommandHandler("movers", handlers.cmd_movers))
+        _application.add_handler(CommandHandler("scout", handlers.cmd_scout))
+        _application.add_handler(CommandHandler("profile", handlers.cmd_profile))
+        _application.add_handler(CommandHandler("senate", handlers.cmd_senate))
+        _application.add_handler(CommandHandler("report", handlers.cmd_report))
         _application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
         )

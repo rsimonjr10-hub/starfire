@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     risk_max_position_size_pct: float = 25.0
     risk_max_trades_per_day: int = 10
 
+    fmp_api_key: str = ""
+
     google_drive_credentials_json: Optional[str] = None
     google_drive_token_json: Optional[str] = None
 

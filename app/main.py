@@ -11,6 +11,7 @@ from app.database import init_db
 from app.routers import webhook, portfolio, trades, goals
 from app.workers.market_worker import MarketWorker
 from app.workers.event_worker import EventWorker
+from app.workers.report_worker import ReportWorker
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 structlog.configure(
@@ -27,6 +28,7 @@ logger = structlog.get_logger(__name__)
 
 market_worker = MarketWorker(interval_seconds=300)
 event_worker = EventWorker()
+report_worker = ReportWorker()
 
 
 @asynccontextmanager
@@ -44,6 +46,7 @@ async def lifespan(app: FastAPI):
     # Start background workers
     market_task = asyncio.create_task(market_worker.start())
     event_task = asyncio.create_task(event_worker.start())
+    report_task = asyncio.create_task(report_worker.start())
     logger.info("background_workers_started")
 
     yield
@@ -51,8 +54,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await market_worker.stop()
     await event_worker.stop()
+    await report_worker.stop()
     market_task.cancel()
     event_task.cancel()
+    report_task.cancel()
     logger.info("starfire_shutdown")
 
 
