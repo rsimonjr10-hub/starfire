@@ -35,7 +35,13 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("health", h.cmd_health))
         _application.add_handler(CommandHandler("osiris", h.cmd_osiris))
 
-        # Google (Gmail + Drive)
+        # Quick entry commands
+        _application.add_handler(CommandHandler("newtask", h.cmd_newtask))
+        _application.add_handler(CommandHandler("setreminder", h.cmd_setreminder))
+        _application.add_handler(CommandHandler("cal", h.cmd_cal))
+        _application.add_handler(CommandHandler("setsheet", h.cmd_setsheet))
+
+        # Google (Gmail + Drive + Calendar + Sheets)
         _application.add_handler(CommandHandler("connect_google", h.cmd_connect_google))
         _application.add_handler(CommandHandler("inbox", h.cmd_inbox))
         _application.add_handler(CommandHandler("search_email", h.cmd_search_email))

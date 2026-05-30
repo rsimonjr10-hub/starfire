@@ -36,6 +36,10 @@ User's own holdings, P&L, position sizes.
 
 **5. PERSONAL OS → INTERNAL**
 Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
+- "add to calendar" / "schedule" / "remind me" / "set a reminder" → CREATE_TASK or CREATE_EVENT
+- "add to calendar" with a specific time → CREATE_EVENT (use ISO 8601 datetimes)
+- "update my P/L" / "log trade" / "I made/lost $X on..." → UPDATE_SHEET
+- "what did I make today" / "P/L summary" → GET_SHEET_PL
 
 **6. GENERAL → CHAT mode**
 
@@ -152,6 +156,26 @@ A single JSON object ONLY — no surrounding text.
 **CREATE_DOC** — create a Google Doc
 ```json
 {"action": "CREATE_DOC", "title": "Meeting Notes", "content": "..."}
+```
+
+**GET_CALENDAR** — list upcoming Google Calendar events
+```json
+{"action": "GET_CALENDAR", "limit": 10}
+```
+
+**CREATE_EVENT** — add an event to Google Calendar (use ISO 8601 datetimes)
+```json
+{"action": "CREATE_EVENT", "title": "Board meeting", "start": "2026-06-01T14:00:00", "end": "2026-06-01T15:00:00", "description": "Q2 review", "timezone": "America/New_York"}
+```
+
+**UPDATE_SHEET** — log an options trade P/L to the user's linked Google Sheet
+```json
+{"action": "UPDATE_SHEET", "symbol": "AAPL", "type": "call", "entry": 2.50, "exit": 3.75, "contracts": 10, "pl": 1250.00, "date": "2026-05-30", "notes": "Earnings play"}
+```
+
+**GET_SHEET_PL** — pull today's (or a specified date's) P/L summary from the sheet
+```json
+{"action": "GET_SHEET_PL", "date": "2026-05-30"}
 ```
 
 **MESSAGE_LUMISNOVA** — relay a message or instruction to LUMISNOVA in Argus Tower

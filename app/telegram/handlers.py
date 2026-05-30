@@ -700,6 +700,122 @@ class TelegramHandlers:
         await self._safe_reply(update, "\n".join(lines))
 
     # ------------------------------------------------------------------ #
+    # QUICK COMMANDS — /newtask  /setreminder  /cal  /setsheet
+    # ------------------------------------------------------------------ #
+
+    async def cmd_newtask(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /newtask Task title [p1-10]"""
+        import re
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: `/newtask Task title [p1-10]`\nExample: `/newtask Call accountant p8`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        priority = 5
+        parts = list(args)
+        if parts and re.match(r"^p\d+$", parts[-1], re.IGNORECASE):
+            priority = max(1, min(10, int(parts.pop()[1:])))
+
+        title = " ".join(parts)
+        user = await self._get_or_create_user(update)
+
+        async with AsyncSessionLocal() as session:
+            task = Task(user_id=user.id, title=title, priority=priority)
+            session.add(task)
+            await session.commit()
+            await session.refresh(task)
+
+        await update.message.reply_text(
+            f"Task added: *{task.title}* (p{task.priority}) — ID `{task.id}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    async def cmd_setreminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /setreminder tomorrow 9am Call mom"""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: `/setreminder [when] [what]`\nExample: `/setreminder tomorrow 9am Call accountant`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        await self._run_brain(update, "Set a reminder: " + " ".join(args))
+
+    async def cmd_cal(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /cal Board meeting tomorrow 2pm"""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: `/cal Event title [date/time]`\nExample: `/cal Board meeting June 5 at 2pm`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        await self._run_brain(update, "Add to calendar: " + " ".join(args))
+
+    async def cmd_setsheet(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Link a Google Sheet for options P/L tracking."""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: `/setsheet [Google Sheet ID]`\n"
+                "Find it in your sheet URL:\n"
+                "`docs.google.com/spreadsheets/d/*[SHEET\\_ID]*/edit`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        sheet_id = args[0].strip()
+        user = await self._get_or_create_user(update)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.id == user.id))
+            db_user = result.scalar_one_or_none()
+            prefs = dict(db_user.preferences or {})
+            prefs["options_sheet_id"] = sheet_id
+            db_user.preferences = prefs
+            await session.commit()
+
+        await update.message.reply_text(
+            f"Options P/L sheet linked.\n"
+            f"Sheet ID: `{sheet_id}`\n\n"
+            f"Tell me: _\"Update my P/L: sold 10 AAPL calls, entry $2.50, exit $3.75\"_ and I'll log it.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    async def _run_brain(self, update: Update, text: str) -> None:
+        """Route arbitrary text through STARFIRE brain and reply."""
+        await update.message.chat.send_action("typing")
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == update.effective_user.id)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                user = User(
+                    telegram_id=update.effective_user.id,
+                    username=update.effective_user.username,
+                    first_name=update.effective_user.first_name,
+                    conversation_history=[],
+                    preferences={},
+                )
+                session.add(user)
+                await session.flush()
+
+            engine = DecisionEngine(session)
+            try:
+                reply = await engine.process_message(user, text)
+                await session.commit()
+            except Exception as e:
+                logger.error("brain_error", error=str(e))
+                await session.rollback()
+                reply = "Something went wrong. Try again."
+
+        await self._safe_reply(update, reply)
+
+    # ------------------------------------------------------------------ #
     # NATURAL LANGUAGE (main STARFIRE brain)
     # ------------------------------------------------------------------ #
 

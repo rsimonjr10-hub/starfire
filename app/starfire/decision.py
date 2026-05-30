@@ -30,7 +30,12 @@ LUMISCAPITAL_ACTIONS = {
     "GET_MOVERS", "GET_INSIDER", "GET_SENATE",
 }
 
-GOOGLE_ACTIONS = {"GET_EMAILS", "READ_EMAIL", "SEND_EMAIL", "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC"}
+GOOGLE_ACTIONS = {
+    "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
+    "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC",
+    "GET_CALENDAR", "CREATE_EVENT",
+    "UPDATE_SHEET", "GET_SHEET_PL",
+}
 
 
 class DecisionEngine:
@@ -409,6 +414,17 @@ class DecisionEngine:
         from app.integrations.gmail_service import GmailService, DriveService
         return GmailService(user.google_token_json), DriveService(user.google_token_json)
 
+    def _google_connected(self, user: User) -> bool:
+        return bool(user.google_token_json)
+
+    def _calendar(self, user: User):
+        from app.integrations.gmail_service import CalendarService
+        return CalendarService(user.google_token_json)
+
+    def _sheets(self, user: User):
+        from app.integrations.gmail_service import SheetsService
+        return SheetsService(user.google_token_json)
+
     async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
         action_type = action.get("action")
         try:
@@ -471,6 +487,105 @@ class DecisionEngine:
         except Exception as e:
             logger.error("google_action_error", action=action_type, error=str(e))
             return f"Google error: {e}"
+
+        # Calendar actions
+        if action_type == "GET_CALENDAR":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            try:
+                events = self._calendar(user).list_upcoming(int(action.get("limit", 10)))
+                if not events:
+                    return "No upcoming calendar events."
+                lines = ["*Upcoming Events*\n"]
+                for e in events:
+                    start = e.get("start", {})
+                    dt = start.get("dateTime", start.get("date", ""))[:16].replace("T", " ")
+                    lines.append(f"`{dt}` — *{e.get('summary', '(no title)')}*")
+                return "\n".join(lines)
+            except Exception as e:
+                logger.error("calendar_get_error", error=str(e))
+                return f"Calendar error: {e}"
+
+        if action_type == "CREATE_EVENT":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            title = action.get("title", "")
+            start = action.get("start", "")
+            if not title or not start:
+                return "Need event title and start time."
+            try:
+                event = self._calendar(user).create_event(
+                    title=title,
+                    start=start,
+                    end=action.get("end"),
+                    description=action.get("description"),
+                    tz=action.get("timezone", "America/New_York"),
+                )
+                if event:
+                    link = event.get("htmlLink", "")
+                    end_str = action.get("end", "")[:16].replace("T", " ") if action.get("end") else ""
+                    return (
+                        f"Calendar event created:\n"
+                        f"*{title}*\n"
+                        f"Start: `{start[:16].replace('T', ' ')}`"
+                        + (f" → `{end_str}`" if end_str else "")
+                        + (f"\n[View]({link})" if link else "")
+                    )
+                return "Failed to create calendar event."
+            except Exception as e:
+                logger.error("calendar_create_error", error=str(e))
+                return f"Calendar error: {e}"
+
+        # Sheets — options P/L tracking
+        if action_type in ("UPDATE_SHEET", "GET_SHEET_PL"):
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            sheet_id = action.get("sheet_id") or (user.preferences or {}).get("options_sheet_id")
+            if not sheet_id:
+                return (
+                    "No P/L sheet linked.\n"
+                    "Use `/setsheet [Google Sheet ID]` — find the ID in your sheet URL."
+                )
+            try:
+                sheets = self._sheets(user)
+                if action_type == "GET_SHEET_PL":
+                    date_prefix = action.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                    records = sheets.get_pl_summary(sheet_id, date_prefix)
+                    if not records:
+                        return f"No P/L entries found for {date_prefix}."
+                    total = sum(float(r.get("pl", 0) or 0) for r in records)
+                    sign = "+" if total >= 0 else ""
+                    lines = [f"*Options P/L — {date_prefix}*\n"]
+                    for r in records:
+                        pl_val = float(r.get("pl", 0) or 0)
+                        s = "+" if pl_val >= 0 else ""
+                        lines.append(f"*{r['symbol']}* {r['type']} — {s}${pl_val:,.2f} ({r['contracts']} contracts)")
+                    lines.append(f"\nTotal: `{sign}${total:,.2f}`")
+                    return "\n".join(lines)
+
+                # UPDATE_SHEET — append a P/L row
+                date = action.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                symbol = action.get("symbol", "")
+                trade_type = action.get("type", "option")
+                entry = float(action.get("entry", 0))
+                exit_price = float(action.get("exit", 0))
+                contracts = int(action.get("contracts", 1))
+                pl = float(action.get("pl", round((exit_price - entry) * contracts * 100, 2)))
+                notes = action.get("notes", "")
+
+                ok = sheets.append_pl_row(sheet_id, date, symbol, trade_type, entry, exit_price, contracts, pl, notes)
+                if ok:
+                    sign = "+" if pl >= 0 else ""
+                    return (
+                        f"P/L logged to sheet:\n"
+                        f"*{symbol.upper()}* {trade_type.upper()}\n"
+                        f"Entry: `${entry}` → Exit: `${exit_price}` | {contracts} contract{'s' if contracts != 1 else ''}\n"
+                        f"P/L: `{sign}${pl:,.2f}`"
+                    )
+                return "Failed to update sheet. Check the sheet ID and that STARFIRE has edit access."
+            except Exception as e:
+                logger.error("sheets_error", action=action_type, error=str(e))
+                return f"Sheets error: {e}"
 
         return "Done."
 

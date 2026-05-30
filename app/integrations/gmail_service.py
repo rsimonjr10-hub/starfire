@@ -4,7 +4,7 @@ import structlog
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 logger = structlog.get_logger(__name__)
 
@@ -14,6 +14,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 
@@ -51,6 +53,18 @@ def get_docs_service(token_json: str):
     from googleapiclient.discovery import build
     creds = _build_credentials(token_json)
     return build("docs", "v1", credentials=creds)
+
+
+def get_calendar_service(token_json: str):
+    from googleapiclient.discovery import build
+    creds = _build_credentials(token_json)
+    return build("calendar", "v3", credentials=creds)
+
+
+def get_sheets_service(token_json: str):
+    from googleapiclient.discovery import build
+    creds = _build_credentials(token_json)
+    return build("sheets", "v4", credentials=creds)
 
 
 def _decode_body(payload: dict) -> str:
@@ -231,3 +245,107 @@ class DriveService:
         except Exception as e:
             logger.error("drive_create_doc_error", title=title, error=str(e))
             return None
+
+
+class CalendarService:
+    def __init__(self, token_json: str):
+        self._token_json = token_json
+
+    def _svc(self):
+        return get_calendar_service(self._token_json)
+
+    def create_event(
+        self,
+        title: str,
+        start: str,
+        end: Optional[str] = None,
+        description: Optional[str] = None,
+        tz: str = "America/New_York",
+    ) -> Optional[dict]:
+        try:
+            if not end:
+                start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                end = (start_dt + timedelta(hours=1)).isoformat()
+            event = {
+                "summary": title,
+                "start": {"dateTime": start, "timeZone": tz},
+                "end": {"dateTime": end, "timeZone": tz},
+            }
+            if description:
+                event["description"] = description
+            return self._svc().events().insert(calendarId="primary", body=event).execute()
+        except Exception as e:
+            logger.error("calendar_create_error", error=str(e))
+            return None
+
+    def list_upcoming(self, limit: int = 10) -> list[dict]:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            result = self._svc().events().list(
+                calendarId="primary",
+                timeMin=now,
+                maxResults=limit,
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+            return result.get("items", [])
+        except Exception as e:
+            logger.error("calendar_list_error", error=str(e))
+            return []
+
+
+class SheetsService:
+    # Expected columns: Date | Symbol | Type | Entry | Exit | Contracts | P/L | Notes
+    RANGE = "Sheet1!A:H"
+
+    def __init__(self, token_json: str):
+        self._token_json = token_json
+
+    def _svc(self):
+        return get_sheets_service(self._token_json)
+
+    def append_pl_row(
+        self,
+        spreadsheet_id: str,
+        date: str,
+        symbol: str,
+        trade_type: str,
+        entry: float,
+        exit_price: float,
+        contracts: int,
+        pl: float,
+        notes: str = "",
+    ) -> bool:
+        try:
+            values = [[date, symbol.upper(), trade_type.upper(), entry, exit_price, contracts, pl, notes]]
+            self._svc().spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=self.RANGE,
+                valueInputOption="USER_ENTERED",
+                body={"values": values},
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error("sheets_append_error", error=str(e))
+            return False
+
+    def get_pl_summary(self, spreadsheet_id: str, date_prefix: Optional[str] = None) -> list[dict]:
+        try:
+            result = self._svc().spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=self.RANGE,
+            ).execute()
+            rows = result.get("values", [])
+            if len(rows) <= 1:
+                return []
+            headers = ["date", "symbol", "type", "entry", "exit", "contracts", "pl", "notes"]
+            records = []
+            for row in rows[1:]:
+                padded = row + [""] * (8 - len(row))
+                record = dict(zip(headers, padded))
+                if not date_prefix or record["date"].startswith(date_prefix):
+                    records.append(record)
+            return records
+        except Exception as e:
+            logger.error("sheets_get_error", error=str(e))
+            return []
