@@ -64,6 +64,12 @@ class DecisionEngine:
         if action_type == "NOTIFY":
             return action.get("message", "")
 
+        # ── DIRECT BOT MESSAGING ────────────────────────────────────────
+        if action_type == "MESSAGE_LUMISNOVA":
+            return await self._message_lumisnova(user, action)
+        if action_type == "MESSAGE_OSIRIS":
+            return await self._message_osiris(user, action)
+
         # ── OSIRIS ROUTING ──────────────────────────────────────────────
         if action_type == "ROUTE_TRADE":
             return await self._route_trade(user, action)
@@ -97,6 +103,34 @@ class DecisionEngine:
             return await self._mark_bill_paid(user, action)
 
         return action.get("message", "Action processed.")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # BOT MESSAGING — relay user instructions to LUMISNOVA / OSIRIS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _message_lumisnova(self, user: User, action: dict) -> str:
+        msg = action.get("message", "")
+        if not msg:
+            return "No message to relay."
+        sent = await lumisnova_telegram.post_to_group(
+            f"📨 STARFIRE → LUMISNOVA\nFrom user {user.telegram_id}:\n\n{msg}"
+        )
+        if sent:
+            return f"Relayed to LUMISNOVA in Argus Tower:\n_{msg}_"
+        return "Couldn't reach Argus Tower. Check LUMISNOVA bridge in /health."
+
+    async def _message_osiris(self, user: User, action: dict) -> str:
+        msg = action.get("message", "")
+        if not msg:
+            return "No message to relay."
+        sent = await osiris_telegram.send_command(
+            "USER_MESSAGE",
+            {"message": msg, "from_user": user.telegram_id},
+            user.telegram_id,
+        )
+        if sent:
+            return f"Relayed to OSIRIS in Argus Tower:\n_{msg}_"
+        return "Couldn't reach Argus Tower. Check OSIRIS bridge in /health."
 
     # ─────────────────────────────────────────────────────────────────────
     # OSIRIS — trade routing
