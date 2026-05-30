@@ -112,12 +112,16 @@ class DecisionEngine:
         msg = action.get("message", "")
         if not msg:
             return "No message to relay."
-        sent = await lumisnova_telegram.post_to_group(
-            f"📨 STARFIRE → LUMISNOVA\nFrom user {user.telegram_id}:\n\n{msg}"
+        # Post to Argus Tower as OSIRIS (STARFIRE doesn't have group access,
+        # and using @Lumiscapital_bot's token causes duplicate responses)
+        sent = await osiris_telegram.send_command(
+            "LUMISNOVA_REQUEST",
+            {"message": msg, "from_user": user.telegram_id},
+            user.telegram_id,
         )
         if sent:
-            return f"Relayed to LUMISNOVA in Argus Tower:\n_{msg}_"
-        return "Couldn't reach Argus Tower. Check LUMISNOVA bridge in /health."
+            return f"Posted to Argus Tower for LUMISNOVA:\n_{msg}_"
+        return "Couldn't reach Argus Tower. Check /health."
 
     async def _message_osiris(self, user: User, action: dict) -> str:
         msg = action.get("message", "")
@@ -281,17 +285,9 @@ class DecisionEngine:
             "You just fetched this data. Give a concise analysis and key takeaways.",
             history, data_context,
         )
-        full_response = formatted
         if analysis["type"] == "chat" and analysis["content"].strip():
-            full_response = formatted + "\n\n---\n" + analysis["content"]
-
-        # Deliver via @Lumiscapital_bot when available — data appears to come from LUMISNOVA
-        if lumisnova_telegram.is_available() and user.telegram_id:
-            sent = await lumisnova_telegram.send_market_data(user.telegram_id, action_type, full_response)
-            if sent:
-                return f"_Data delivered via LUMISNOVA._"
-
-        return full_response
+            return formatted + "\n\n---\n" + analysis["content"]
+        return formatted
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
         try:
