@@ -32,6 +32,9 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("budget", h.cmd_budget))
         _application.add_handler(CommandHandler("portfolio", h.cmd_portfolio))
         _application.add_handler(CommandHandler("risk", h.cmd_risk))
+        _application.add_handler(CommandHandler("bills", h.cmd_bills))
+        _application.add_handler(CommandHandler("paid", h.cmd_paid))
+        _application.add_handler(CommandHandler("health", h.cmd_health))
         _application.add_handler(CommandHandler("osiris", h.cmd_osiris))
 
         # Google (Gmail + Drive)

@@ -4,6 +4,7 @@ from app.models.trade import Trade
 from app.models.spending import SpendingRecord
 from app.models.task import Task
 from app.models.goal import Goal
+from app.models.bill import Bill
 from app.models.event_log import EventLog, ExecutionLog
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "SpendingRecord",
     "Task",
     "Goal",
+    "Bill",
     "EventLog",
     "ExecutionLog",
 ]

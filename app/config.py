@@ -35,9 +35,12 @@ class Settings(BaseSettings):
     osiris_service_url: str = ""
     inter_service_secret: str = "change-me-inter-service-secret"
 
-    # OSIRIS Telegram bridge (osiris_prime_bot)
-    osiris_bot_token: str = ""            # osiris_prime_bot token (for sending as OSIRIS)
-    osiris_telegram_chat_id: str = ""     # group chat_id where osiris_prime_bot listens
+    # OSIRIS Telegram bridge (@osiris_prime_bot)
+    osiris_bot_token: str = ""
+    osiris_telegram_chat_id: str = ""
+
+    # LUMISNOVA Telegram bridge (@lumisnovacapital_bot)
+    lumisnova_telegram_chat_id: str = ""  # group where lumisnovacapital_bot listens
 
     google_client_id: str = ""
     google_client_secret: str = ""

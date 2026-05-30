@@ -3,22 +3,24 @@ import structlog
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.starfire.brain import StarfireBrain
 from app.starfire.prompts import (
     PORTFOLIO_CONTEXT_TEMPLATE,
     TASK_CONTEXT_TEMPLATE,
     GOAL_CONTEXT_TEMPLATE,
+    BILLS_CONTEXT_TEMPLATE,
     DATA_RESULT_TEMPLATE,
 )
-from app.models import User, PortfolioState, Task, Goal
+from app.models import User, PortfolioState, Task, Goal, Bill
 from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
 from app.integrations.lumiscapital import lumiscapital, formatter
 from app.integrations.osiris_bridge import osiris_bridge
 from app.integrations.osiris_telegram import osiris_telegram
+from app.integrations.lumisnova_telegram import lumisnova_telegram
 
 logger = structlog.get_logger(__name__)
 
@@ -52,7 +54,6 @@ class DecisionEngine:
 
         updated_history = self.brain.append_to_history(history, message, result["raw"])
         user.conversation_history = updated_history[-40:]
-
         return reply
 
     async def _handle_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
@@ -60,186 +61,173 @@ class DecisionEngine:
 
         if action_type == "IGNORE":
             return action.get("message", "Noted.")
-
         if action_type == "NOTIFY":
             return action.get("message", "")
 
-        if action_type == "TRADE":
-            return await self._dispatch_trade(user, action)
+        # ── OSIRIS ROUTING ──────────────────────────────────────────────
+        if action_type == "ROUTE_TRADE":
+            return await self._route_trade(user, action)
 
-        if action_type == "CREATE_TASK":
-            return await self._create_task(user, action)
+        # ── LUMISNOVA ROUTING ───────────────────────────────────────────
+        if action_type == "QUERY_LUMISNOVA":
+            return await self._query_lumisnova(user, action, history, context)
 
-        if action_type == "COMPLETE_TASK":
-            return await self._complete_task(user, action)
-
-        if action_type == "UPDATE_GOAL":
-            return await self._update_goal(user, action)
-
-        if action_type == "RECORD_SPENDING":
-            return await self._record_spending(user, action)
-
-        if action_type == "SET_BUDGET":
-            return await self._set_budget(user, action)
-
+        # ── MARKET DATA (direct FMP) ─────────────────────────────────────
         if action_type in LUMISCAPITAL_ACTIONS:
             return await self._fetch_and_analyze(user, action, history, context)
 
+        # ── GOOGLE ──────────────────────────────────────────────────────
         if action_type in GOOGLE_ACTIONS:
             return await self._handle_google_action(user, action, history, context)
 
+        # ── INTERNAL TASKS / GOALS / SPENDING / BILLS ──────────────────
+        if action_type == "CREATE_TASK":
+            return await self._create_task(user, action)
+        if action_type == "COMPLETE_TASK":
+            return await self._complete_task(user, action)
+        if action_type == "UPDATE_GOAL":
+            return await self._update_goal(user, action)
+        if action_type == "RECORD_SPENDING":
+            return await self._record_spending(user, action)
+        if action_type == "SET_BUDGET":
+            return await self._set_budget(user, action)
+        if action_type == "ADD_BILL":
+            return await self._add_bill(user, action)
+        if action_type == "MARK_BILL_PAID":
+            return await self._mark_bill_paid(user, action)
+
         return action.get("message", "Action processed.")
 
-    # ------------------------------------------------------------------ #
-    # GOOGLE — Gmail & Drive
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
+    # OSIRIS — trade routing
+    # ─────────────────────────────────────────────────────────────────────
 
-    def _get_google_services(self, user: User):
-        """Returns (gmail_service, drive_service) or raises RuntimeError."""
-        if not user.google_token_json:
-            raise RuntimeError("Google not connected. Use /connect_google to link your account.")
-        from app.integrations.gmail_service import GmailService, DriveService
-        return GmailService(user.google_token_json), DriveService(user.google_token_json)
+    async def _route_trade(self, user: User, action: dict) -> str:
+        symbol = action.get("symbol", "")
+        side = action.get("side", "BUY")
+        quantity = action.get("quantity")
+        size_pct = action.get("size_pct", 5.0)
 
-    async def _handle_google_action(
+        if not symbol or not side:
+            return "Missing symbol or side for trade. Please specify what to trade."
+
+        # Risk check
+        risk_result = await self.risk.validate_trade(user.id, symbol, side, float(size_pct))
+        if not risk_result["allowed"]:
+            return (
+                f"Trade blocked by risk engine: {risk_result['reason']}\n\n"
+                "Would you like to adjust the parameters?"
+            )
+
+        # Send to OSIRIS via Telegram bridge first (primary)
+        tg_sent = await osiris_telegram.send_trade_order(
+            user_telegram_id=user.telegram_id,
+            symbol=symbol,
+            side=side,
+            size_pct=float(size_pct),
+            extra={"quantity": quantity, "intent": action},
+        )
+
+        # Also attempt HTTP bridge if configured
+        if osiris_bridge.is_available():
+            execution = await osiris_bridge.execute_trade(
+                user_id=user.id,
+                symbol=symbol,
+                side=side,
+                size_pct=float(size_pct),
+                intent_payload=action,
+            )
+        else:
+            execution = await self.osiris.execute_trade(
+                user_id=user.id,
+                symbol=symbol,
+                side=side,
+                size_pct=float(size_pct),
+                intent_payload=action,
+            )
+
+        if execution["status"] == "FILLED":
+            await self.publisher.publish(
+                "PORTFOLIO_EVENT",
+                {"user_id": user.id, "event": "TRADE_FILLED", "symbol": symbol, "side": side,
+                 "filled_price": execution["filled_price"]},
+            )
+            tg_status = " | Order also sent to Argus Tower." if tg_sent else ""
+            return (
+                f"OSIRIS executed.\n"
+                f"{side} {symbol} @ ${execution['filled_price']:,.4f}\n"
+                f"Slippage: {execution['slippage']*100:.3f}%\n"
+                f"Order ID: {execution['order_id']}"
+                f"{tg_status}"
+            )
+
+        if tg_sent:
+            return (
+                f"Trade order sent to OSIRIS via Argus Tower.\n"
+                f"{side} {symbol} — OSIRIS will confirm execution.\n"
+                f"_(HTTP bridge: {execution.get('error', 'not available')})_"
+            )
+
+        return f"Could not reach OSIRIS. Error: {execution.get('error', 'Unknown')}"
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LUMISNOVA — financial data routing
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _query_lumisnova(
         self, user: User, action: dict, history: list, context: Optional[str]
     ) -> str:
-        action_type = action.get("action")
-        try:
-            gmail, drive = self._get_google_services(user)
-        except RuntimeError as e:
-            return str(e)
+        query = action.get("query", "portfolio_summary")
 
-        try:
-            if action_type == "GET_EMAILS":
-                query = action.get("query", "unread")
-                limit = int(action.get("limit", 10))
-                if query == "unread":
-                    messages = gmail.list_unread(limit)
-                else:
-                    messages = gmail.search(query, limit)
+        # Route via Telegram if configured
+        if lumisnova_telegram.is_available():
+            sent = await lumisnova_telegram.query(query, action, user.telegram_id)
+            if sent:
+                return f"Query sent to LUMISNOVA (@lumisnovacapital_bot).\n_They will reply in your channel with: {query}_"
 
-                if not messages:
-                    return "No emails found."
-
-                lines = [f"*{'Unread Emails' if query == 'unread' else 'Email Search: ' + query}*\n"]
-                for i, m in enumerate(messages, 1):
-                    lines.append(
-                        f"{i}. *{m.get('subject','(no subject)')}*\n"
-                        f"   From: {m.get('from','')}\n"
-                        f"   {m.get('snippet','')[:100]}…"
-                    )
-
-                formatted = "\n".join(lines)
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(
-                    action=action_type, data=formatted[:2000]
+        # Fallback: serve what we can from direct FMP
+        if "portfolio" in query:
+            result = await self.db.execute(
+                select(PortfolioState).where(PortfolioState.user_id == user.id)
+                .order_by(PortfolioState.snapshot_at.desc()).limit(1)
+            )
+            portfolio = result.scalar_one_or_none()
+            if portfolio:
+                return (
+                    f"Portfolio (local snapshot):\n"
+                    f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
+                    f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
+                    f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)\n\n"
+                    f"_Connect LUMISNOVA for live portfolio data: set LUMISNOVA\\_TELEGRAM\\_CHAT\\_ID in Railway._"
                 )
-                analysis = await self.brain.think(
-                    "Summarize these emails and flag anything important or urgent.",
-                    history, data_ctx,
-                )
-                if analysis["type"] == "chat" and analysis["content"].strip():
-                    return formatted + "\n\n---\n" + analysis["content"]
-                return formatted
+            return "No portfolio data yet. Connect LUMISNOVA for live tracking."
 
-            if action_type == "READ_EMAIL":
-                message_id = action.get("message_id", "")
-                msg = gmail.read_message(message_id)
-                if not msg:
-                    return "Could not read that email."
+        return (
+            f"LUMISNOVA not connected.\n"
+            f"Set `LUMISNOVA_TELEGRAM_CHAT_ID` in Railway to route financial queries to @lumisnovacapital_bot."
+        )
 
-                text = (
-                    f"*From:* {msg['from']}\n"
-                    f"*Subject:* {msg['subject']}\n"
-                    f"*Date:* {msg['date']}\n\n"
-                    f"{msg['body']}"
-                )
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=text[:3000])
-                analysis = await self.brain.think(
-                    "Summarize this email and suggest a response if appropriate.",
-                    history, data_ctx,
-                )
-                if analysis["type"] == "chat" and analysis["content"].strip():
-                    return text[:1500] + "\n\n---\n*STARFIRE:*\n" + analysis["content"]
-                return text
-
-            if action_type == "SEND_EMAIL":
-                to = action.get("to", "")
-                subject = action.get("subject", "")
-                body = action.get("body", "")
-                thread_id = action.get("reply_to_thread")
-                if not to or not subject or not body:
-                    return "Missing to/subject/body for email."
-                success = gmail.send_email(to, subject, body, reply_to_thread=thread_id)
-                if success:
-                    return f"Email sent to {to}\nSubject: {subject}"
-                return "Failed to send email. Check that Google is connected and has Gmail send permissions."
-
-            if action_type == "SEARCH_DRIVE":
-                query = action.get("query", "")
-                files = drive.search(query)
-                if not files:
-                    return f"No Drive files found for: {query}"
-                lines = [f"*Drive Search: {query}*\n"]
-                for f in files:
-                    lines.append(
-                        f"• [{f.get('name','')}]({f.get('webViewLink','')})\n"
-                        f"  {f.get('mimeType','').split('.')[-1]} — {f.get('modifiedTime','')[:10]}"
-                    )
-                return "\n".join(lines)
-
-            if action_type == "READ_DOC":
-                file_id = action.get("file_id", "")
-                content = drive.read_doc(file_id)
-                if not content:
-                    return "Could not read that document."
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(
-                    action=action_type, data=content[:3000]
-                )
-                analysis = await self.brain.think(
-                    "Summarize this document concisely.",
-                    history, data_ctx,
-                )
-                if analysis["type"] == "chat":
-                    return analysis["content"]
-                return content[:2000]
-
-            if action_type == "CREATE_DOC":
-                title = action.get("title", "STARFIRE Document")
-                content = action.get("content", "")
-                link = drive.create_doc(title, content)
-                if link:
-                    return f"Document created: [{title}]({link})"
-                return "Failed to create document."
-
-        except Exception as e:
-            logger.error("google_action_error", action=action_type, error=str(e))
-            return f"Error with Google integration: {e}"
-
-        return action.get("message", "Done.")
-
-    # ------------------------------------------------------------------ #
-    # LUMISCAPITAL
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
+    # MARKET DATA — direct FMP (GET_* actions)
+    # ─────────────────────────────────────────────────────────────────────
 
     async def _fetch_and_analyze(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
         action_type = action.get("action")
         raw_data = await self._fetch_lumiscapital(action_type, action)
 
         if raw_data is None:
-            return "I couldn't retrieve that data right now. The market data service may be unavailable."
+            return "Market data unavailable. Check your FMP API key."
 
         formatted = self._format_lumiscapital_data(action_type, action, raw_data)
         data_context = (context or "") + DATA_RESULT_TEMPLATE.format(
             action=action_type, data=formatted[:2000],
         )
         analysis = await self.brain.think(
-            "You just fetched this data. Provide a concise analysis and key takeaways.",
+            "You just fetched this data. Give a concise analysis and key takeaways.",
             history, data_context,
         )
-
         if analysis["type"] == "chat" and analysis["content"].strip():
-            return formatted + "\n\n---\n*STARFIRE Analysis*\n" + analysis["content"]
+            return formatted + "\n\n---\n" + analysis["content"]
         return formatted
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
@@ -248,24 +236,17 @@ class DecisionEngine:
                 symbols = [s.strip() for s in action.get("symbols", action.get("symbol", "")).split(",") if s.strip()]
                 if not symbols:
                     return None
-                if len(symbols) == 1:
-                    return await lumiscapital.get_quote(symbols[0])
-                return await lumiscapital.get_quotes(symbols)
+                return await lumiscapital.get_quote(symbols[0]) if len(symbols) == 1 else await lumiscapital.get_quotes(symbols)
 
             if action_type == "GET_MACRO":
-                indicators = await lumiscapital.get_economic_indicators()
-                treasury = await lumiscapital.get_treasury_rates()
-                return {"indicators": indicators, "treasury": treasury}
+                return {"indicators": await lumiscapital.get_economic_indicators(), "treasury": await lumiscapital.get_treasury_rates()}
 
             if action_type == "GET_EARNINGS":
-                days = int(action.get("days_ahead", 7))
-                return await lumiscapital.get_earnings_calendar(days)
+                return await lumiscapital.get_earnings_calendar(int(action.get("days_ahead", 7)))
 
             if action_type == "GET_EARNINGS_DETAIL":
-                symbol = action.get("symbol", "")
-                surprises = await lumiscapital.get_earnings_surprises(symbol)
-                estimates = await lumiscapital.get_analyst_estimates(symbol)
-                return {"surprises": surprises, "estimates": estimates, "symbol": symbol}
+                s = action.get("symbol", "")
+                return {"surprises": await lumiscapital.get_earnings_surprises(s), "estimates": await lumiscapital.get_analyst_estimates(s), "symbol": s}
 
             if action_type == "GET_NEWS":
                 topic = action.get("topic", "general")
@@ -289,18 +270,16 @@ class DecisionEngine:
                 return await lumiscapital.scout_stocks(**criteria)
 
             if action_type == "GET_PROFILE":
-                symbol = action.get("symbol", "")
-                profile = await lumiscapital.get_company_profile(symbol)
-                metrics = await lumiscapital.get_key_metrics(symbol)
-                return {"profile": profile, "metrics": metrics}
+                s = action.get("symbol", "")
+                return {"profile": await lumiscapital.get_company_profile(s), "metrics": await lumiscapital.get_key_metrics(s)}
 
             if action_type == "GET_MOVERS":
-                mover_type = action.get("type", "gainers")
-                if mover_type == "gainers":
-                    return await lumiscapital.get_gainers()
-                if mover_type == "losers":
+                t = action.get("type", "gainers")
+                if t == "losers":
                     return await lumiscapital.get_losers()
-                return await lumiscapital.get_most_active()
+                if t in ("actives", "active"):
+                    return await lumiscapital.get_most_active()
+                return await lumiscapital.get_gainers()
 
             if action_type == "GET_INSIDER":
                 return await lumiscapital.get_insider_trades(action.get("symbol", ""))
@@ -314,128 +293,174 @@ class DecisionEngine:
 
     def _format_lumiscapital_data(self, action_type: str, action: dict, data) -> str:
         if data is None:
-            return "No data available."
-
+            return "No data."
         if action_type == "GET_PRICE":
             if isinstance(data, list):
                 return "\n\n".join(formatter.format_quote(q) for q in data)
             return formatter.format_quote(data)
-
         if action_type == "GET_MACRO":
             return formatter.format_macro_summary(data.get("indicators", []), data.get("treasury"))
-
         if action_type == "GET_EARNINGS":
             return formatter.format_earnings_calendar(data)
-
         if action_type == "GET_EARNINGS_DETAIL":
-            symbol = data.get("symbol", "")
-            lines = [f"*{symbol} Earnings*\n"]
-            for s in data.get("surprises", [])[:5]:
-                lines.append(f"  {s.get('date','')[:7]}: Actual `{s.get('actualEarningResult','N/A')}` vs Est `{s.get('estimatedEarning','N/A')}`")
-            for e in data.get("estimates", [])[:3]:
-                lines.append(f"  {e.get('date','')[:7]}: EPS `{e.get('estimatedEpsAvg','N/A')}` Rev `${(e.get('estimatedRevenueAvg') or 0)/1e9:.2f}B`")
+            s = data.get("symbol", "")
+            lines = [f"*{s} Earnings*\n"]
+            for x in data.get("surprises", [])[:5]:
+                lines.append(f"  {x.get('date','')[:7]}: Actual `{x.get('actualEarningResult','N/A')}` vs Est `{x.get('estimatedEarning','N/A')}`")
+            for x in data.get("estimates", [])[:3]:
+                lines.append(f"  {x.get('date','')[:7]}: EPS `{x.get('estimatedEpsAvg','N/A')}` Rev `${(x.get('estimatedRevenueAvg') or 0)/1e9:.2f}B`")
             return "\n".join(lines)
-
         if action_type == "GET_NEWS":
-            topic = action.get("topic", "general")
-            title = "Market News" if topic == "general" else "Political News" if topic == "political" else f"{topic.upper()} News"
+            t = action.get("topic", "general")
+            title = "Market News" if t == "general" else "Political News" if t == "political" else f"{t.upper()} News"
             return formatter.format_news(data, title)
-
         if action_type == "GET_SECTOR":
             return formatter.format_sector_performance(data)
-
         if action_type == "GET_SCOUT":
             return formatter.format_scout_report(data, "Stock Scout")
-
         if action_type == "GET_PROFILE":
-            profile = data.get("profile")
-            return "Company profile not found." if not profile else formatter.format_company_profile(profile, data.get("metrics"))
-
+            p = data.get("profile")
+            return "Profile not found." if not p else formatter.format_company_profile(p, data.get("metrics"))
         if action_type == "GET_MOVERS":
             titles = {"gainers": "Top Gainers", "losers": "Top Losers", "actives": "Most Active"}
             return formatter.format_scout_report(data, titles.get(action.get("type", "gainers"), "Movers"))
-
         if action_type == "GET_INSIDER":
             if not data:
                 return "No insider trades found."
-            lines = [f"*Insider Trades — {action.get('symbol','').upper()}*\n"]
+            lines = [f"*Insider — {action.get('symbol','').upper()}*\n"]
             for t in data[:10]:
                 lines.append(f"`{t.get('transactionDate','')[:10]}` {t.get('reportingName','')} — {t.get('transactionType','')} `{t.get('securitiesTransacted','')}`")
             return "\n".join(lines)
-
         if action_type == "GET_SENATE":
             if not data:
-                return "No Senate disclosures found."
+                return "No Senate disclosures."
             lines = ["*Senate Trades*\n"]
             for t in data[:15]:
                 lines.append(f"`{t.get('transactionDate','')[:10]}` *{t.get('senator','')}* — {t.get('asset_description','')} ({t.get('type','')})")
             return "\n".join(lines)
-
         return str(data)[:1500]
 
-    # ------------------------------------------------------------------ #
-    # TRADE
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
+    # GOOGLE
+    # ─────────────────────────────────────────────────────────────────────
 
-    async def _dispatch_trade(self, user: User, action: dict) -> str:
-        symbol = action.get("symbol", "")
-        side = action.get("side", "BUY")
-        size_pct = float(action.get("size_pct", 0))
+    def _get_google_services(self, user: User):
+        if not user.google_token_json:
+            raise RuntimeError("Google not connected. Use /connect_google to link your account.")
+        from app.integrations.gmail_service import GmailService, DriveService
+        return GmailService(user.google_token_json), DriveService(user.google_token_json)
 
-        if not symbol or not side or size_pct <= 0:
-            return "I need a valid symbol, side (BUY/SELL), and position size to execute a trade."
+    async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
+        action_type = action.get("action")
+        try:
+            gmail, drive = self._get_google_services(user)
+        except RuntimeError as e:
+            return str(e)
 
-        risk_result = await self.risk.validate_trade(user.id, symbol, side, size_pct)
-        if not risk_result["allowed"]:
-            return (
-                f"Trade blocked by risk engine: {risk_result['reason']}\n\n"
-                "Would you like to adjust the parameters?"
-            )
+        try:
+            if action_type == "GET_EMAILS":
+                query = action.get("query", "unread")
+                limit = int(action.get("limit", 10))
+                messages = gmail.list_unread(limit) if query == "unread" else gmail.search(query, limit)
+                if not messages:
+                    return "No emails found."
+                lines = [f"*{'Unread' if query == 'unread' else 'Search: ' + query}*\n"]
+                for i, m in enumerate(messages, 1):
+                    lines.append(f"{i}. *{m.get('subject','(no subject)')}*\n   From: {m.get('from','')}\n   _{m.get('snippet','')[:100]}_")
+                formatted = "\n".join(lines)
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=formatted[:2000])
+                analysis = await self.brain.think("Summarize these emails, flag urgent items.", history, data_ctx)
+                return formatted + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
 
-        if osiris_bridge.is_available():
-            execution = await osiris_bridge.execute_trade(
-                user_id=user.id, symbol=symbol, side=side,
-                size_pct=size_pct, intent_payload=action,
-            )
-        else:
-            execution = await self.osiris.execute_trade(
-                user_id=user.id, symbol=symbol, side=side,
-                size_pct=size_pct, intent_payload=action,
-            )
+            if action_type == "READ_EMAIL":
+                msg = gmail.read_message(action.get("message_id", ""))
+                if not msg:
+                    return "Could not read that email."
+                text = f"*From:* {msg['from']}\n*Subject:* {msg['subject']}\n*Date:* {msg['date']}\n\n{msg['body']}"
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=text[:3000])
+                analysis = await self.brain.think("Summarize and suggest a response if appropriate.", history, data_ctx)
+                return text[:1500] + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
 
-        # Also forward trade order to osiris_prime_bot via Telegram if configured
-        await osiris_telegram.send_trade_order(
-            user_telegram_id=user.telegram_id,
-            symbol=symbol,
-            side=side,
-            size_pct=size_pct,
-            extra={"intent": action},
+            if action_type == "SEND_EMAIL":
+                to, subject, body = action.get("to", ""), action.get("subject", ""), action.get("body", "")
+                if not to or not subject or not body:
+                    return "Missing to/subject/body."
+                success = gmail.send_email(to, subject, body, reply_to_thread=action.get("reply_to_thread"))
+                return f"Email sent to {to}\nSubject: {subject}" if success else "Failed to send email."
+
+            if action_type == "SEARCH_DRIVE":
+                files = drive.search(action.get("query", ""))
+                if not files:
+                    return "No Drive files found."
+                lines = [f"*Drive: {action.get('query','')}*\n"]
+                for f in files:
+                    lines.append(f"• [{f.get('name','')}]({f.get('webViewLink','')})\n  {f.get('modifiedTime','')[:10]}")
+                return "\n".join(lines)
+
+            if action_type == "READ_DOC":
+                content = drive.read_doc(action.get("file_id", ""))
+                if not content:
+                    return "Could not read document."
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=content[:3000])
+                analysis = await self.brain.think("Summarize this document.", history, data_ctx)
+                return analysis["content"] if analysis["type"] == "chat" else content[:2000]
+
+            if action_type == "CREATE_DOC":
+                link = drive.create_doc(action.get("title", "STARFIRE Doc"), action.get("content", ""))
+                return f"Document created: [{action.get('title','')}]({link})" if link else "Failed to create document."
+
+        except Exception as e:
+            logger.error("google_action_error", action=action_type, error=str(e))
+            return f"Google error: {e}"
+
+        return "Done."
+
+    # ─────────────────────────────────────────────────────────────────────
+    # BILLS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _add_bill(self, user: User, action: dict) -> str:
+        bill = Bill(
+            user_id=user.id,
+            name=action.get("name", "New Bill"),
+            category=action.get("category", "other"),
+            amount=float(action.get("amount", 0)),
+            due_day=action.get("due_day"),
+            is_recurring=action.get("is_recurring", True),
+            autopay=action.get("autopay", False),
+            notes=action.get("notes"),
         )
+        if action.get("due_date"):
+            try:
+                bill.due_date = datetime.fromisoformat(action["due_date"].replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        self.db.add(bill)
+        await self.db.flush()
+        recur = "monthly" if bill.is_recurring else "one-time"
+        due = f" (due day {bill.due_day})" if bill.due_day else ""
+        return f"Bill added: *{bill.name}* — ${bill.amount:.2f}/{recur}{due}"
 
-        if execution["status"] == "FILLED":
-            await self.publisher.publish(
-                "PORTFOLIO_EVENT",
-                {"user_id": user.id, "event": "TRADE_FILLED", "symbol": symbol, "side": side,
-                 "filled_price": execution["filled_price"]},
-            )
-            source = "OSIRIS (external)" if osiris_bridge.is_available() else "OSIRIS"
-            return (
-                f"Trade executed by {source}.\n"
-                f"{side} {symbol} @ ${execution['filled_price']:,.4f}\n"
-                f"Slippage: {execution['slippage']*100:.3f}%\n"
-                f"Order ID: {execution['order_id']}"
-            )
-        return f"Trade failed: {execution.get('error', 'Unknown error')}"
+    async def _mark_bill_paid(self, user: User, action: dict) -> str:
+        bill_id = action.get("bill_id")
+        if not bill_id:
+            return "Which bill? Use /bills to see IDs."
+        result = await self.db.execute(select(Bill).where(Bill.id == bill_id, Bill.user_id == user.id))
+        bill = result.scalar_one_or_none()
+        if not bill:
+            return f"Bill {bill_id} not found."
+        bill.last_paid_at = datetime.now(timezone.utc)
+        return f"*{bill.name}* marked as paid."
 
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
     # TASKS / GOALS / SPENDING / BUDGET
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
 
     async def _create_task(self, user: User, action: dict) -> str:
         from app.models.task import Task as TaskModel
         task = TaskModel(
             user_id=user.id,
-            title=action.get("title", action.get("message", "New Task")),
+            title=action.get("title", "New Task"),
             description=action.get("description"),
             priority=action.get("priority", 5),
         )
@@ -447,15 +472,13 @@ class DecisionEngine:
         self.db.add(task)
         await self.db.flush()
         due_str = f" — due {task.due_at.strftime('%b %d')}" if task.due_at else ""
-        return f"Task added: *{task.title}*{due_str} (priority {task.priority}/10)"
+        return f"Task added: *{task.title}*{due_str}"
 
     async def _complete_task(self, user: User, action: dict) -> str:
         task_id = action.get("task_id")
         if not task_id:
-            return "Which task should I mark complete? Use /tasks to see IDs."
-        result = await self.db.execute(
-            select(Task).where(Task.id == task_id, Task.user_id == user.id)
-        )
+            return "Which task? Use /tasks to see IDs."
+        result = await self.db.execute(select(Task).where(Task.id == task_id, Task.user_id == user.id))
         task = result.scalar_one_or_none()
         if not task:
             return f"Task {task_id} not found."
@@ -480,14 +503,14 @@ class DecisionEngine:
                 pass
         self.db.add(goal)
         await self.db.flush()
-        return f"Goal set: *{goal.title}*\nTarget: {goal.target_value} {goal.unit or ''}"
+        return f"Goal set: *{goal.title}* — Target: {goal.target_value} {goal.unit or ''}"
 
     async def _record_spending(self, user: User, action: dict) -> str:
         from app.models.spending import SpendingRecord
         record = SpendingRecord(
             user_id=user.id,
             category=action.get("category", "General"),
-            description=action.get("description", action.get("message")),
+            description=action.get("description"),
             amount=float(action.get("amount", 0)),
         )
         self.db.add(record)
@@ -508,13 +531,15 @@ class DecisionEngine:
         lines = [f"  {cat}: ${limit:.2f}/mo" for cat, limit in sorted(current.items())]
         return "Budget updated:\n" + "\n".join(lines)
 
-    # ------------------------------------------------------------------ #
-    # CONTEXT
-    # ------------------------------------------------------------------ #
+    # ─────────────────────────────────────────────────────────────────────
+    # CONTEXT BUILDER
+    # ─────────────────────────────────────────────────────────────────────
 
     async def _build_context(self, user: User) -> Optional[str]:
         parts = []
+        now = datetime.now(timezone.utc)
 
+        # Portfolio
         result = await self.db.execute(
             select(PortfolioState).where(PortfolioState.user_id == user.id)
             .order_by(PortfolioState.snapshot_at.desc()).limit(1)
@@ -529,6 +554,7 @@ class DecisionEngine:
                 positions=str(portfolio.positions or {}),
             ))
 
+        # Tasks
         result = await self.db.execute(
             select(Task).where(Task.user_id == user.id, Task.status == "PENDING")
             .order_by(Task.priority.desc()).limit(5)
@@ -541,19 +567,45 @@ class DecisionEngine:
             )
             parts.append(TASK_CONTEXT_TEMPLATE.format(count=len(tasks), tasks=task_lines))
 
+        # Goals
         result = await self.db.execute(
             select(Goal).where(Goal.user_id == user.id, Goal.status == "ACTIVE").limit(5)
         )
         goals = result.scalars().all()
         if goals:
-            goal_lines = "\n".join(
-                f"- {g.title}: {g.current_value}/{g.target_value} {g.unit or ''}" for g in goals
-            )
+            goal_lines = "\n".join(f"- {g.title}: {g.current_value}/{g.target_value} {g.unit or ''}" for g in goals)
             parts.append(GOAL_CONTEXT_TEMPLATE.format(goals=goal_lines))
 
-        if user.google_token_json:
-            parts.append("## Google Integration: Connected (Gmail + Drive available)")
-        else:
-            parts.append("## Google Integration: Not connected. User can type /connect_google to link Gmail and Drive.")
+        # Upcoming bills (due within 7 days)
+        result = await self.db.execute(
+            select(Bill).where(Bill.user_id == user.id, Bill.is_active == True)
+        )
+        bills = result.scalars().all()
+        upcoming = []
+        for b in bills:
+            if b.is_recurring and b.due_day:
+                # Calculate next due date
+                next_due = now.replace(day=min(b.due_day, 28))
+                if next_due < now:
+                    if now.month == 12:
+                        next_due = next_due.replace(year=now.year + 1, month=1)
+                    else:
+                        next_due = next_due.replace(month=now.month + 1)
+                if (next_due - now).days <= 7:
+                    upcoming.append(f"- {b.name}: ${float(b.amount):.2f} due {next_due.strftime('%b %d')}")
+            elif b.due_date and 0 <= (b.due_date - now).days <= 7:
+                upcoming.append(f"- {b.name}: ${float(b.amount):.2f} due {b.due_date.strftime('%b %d')}")
+        if upcoming:
+            parts.append(BILLS_CONTEXT_TEMPLATE.format(bills="\n".join(upcoming)))
+
+        # System status
+        osiris_ok = osiris_telegram.is_available()
+        lumisnova_ok = lumisnova_telegram.is_available()
+        parts.append(
+            f"## System Status\n"
+            f"- OSIRIS bridge: {'connected (Argus Tower)' if osiris_ok else 'HTTP only'}\n"
+            f"- LUMISNOVA bridge: {'connected' if lumisnova_ok else 'not connected (using direct FMP)'}\n"
+            f"- Google: {'connected' if user.google_token_json else 'not connected'}"
+        )
 
         return "\n".join(parts) if parts else None

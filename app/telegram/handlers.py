@@ -6,7 +6,7 @@ from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
 
 from app.database import AsyncSessionLocal
-from app.models import User, PortfolioState, Task, Goal, SpendingRecord
+from app.models import User, PortfolioState, Task, Goal, SpendingRecord, Bill
 from app.starfire.decision import DecisionEngine
 from app.integrations.lumiscapital import lumiscapital, formatter
 from app.config import settings
@@ -45,13 +45,12 @@ class TelegramHandlers:
             f"I manage your tasks, inbox, spending, goals, and more. "
             f"Just talk to me like you'd talk to a chief of staff.\n\n"
             f"*Get started:*\n"
-            f"/connect\\_google — Link Gmail & Drive\n"
             f"/week — This week's tasks\n"
-            f"/inbox — Check your emails\n"
-            f"/spending — Spending summary\n"
-            f"/goals — Active goals\n"
+            f"/bills — Bills & subscriptions\n"
+            f"/inbox — Check emails (needs /connect\\_google)\n"
+            f"/health — System status (OSIRIS, LUMISNOVA, Google)\n"
             f"/help — Full command list\n\n"
-            f"Or just tell me what you need done.",
+            f"Or just talk to me naturally.",
             parse_mode=ParseMode.MARKDOWN,
         )
 
@@ -63,9 +62,14 @@ class TelegramHandlers:
             "/tasks — All pending tasks\n"
             "/done [id] — Mark task complete\n"
             "/goals — Active goals\n"
+            "/bills — Bills & subscriptions\n"
+            "/paid [id] — Mark bill as paid\n"
             "/spending — 30-day spending\n"
             "/log [amount] [category] [desc] — Log expense\n"
-            "/budget — Monthly budget overview\n\n"
+            "/budget — Monthly budget vs actual\n\n"
+            "*System*\n"
+            "/health — Full system health check\n"
+            "/osiris — OSIRIS bridge status\n\n"
             "*Gmail & Drive*\n"
             "/inbox — Unread emails\n"
             "/search\\_email [query] — Search emails\n"
@@ -580,32 +584,127 @@ class TelegramHandlers:
             parse_mode=ParseMode.MARKDOWN,
         )
 
+    async def cmd_bills(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show all active bills and subscriptions."""
+        user = await self._get_or_create_user(update)
+        now = datetime.now(timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Bill)
+                .where(Bill.user_id == user.id, Bill.is_active == True)
+                .order_by(Bill.category, Bill.name)
+            )
+            bills = result.scalars().all()
+
+        if not bills:
+            await update.message.reply_text(
+                "No bills tracked. Tell me about your bills:\n"
+                "_\"Add Netflix $15.99 monthly due on the 15th\"_",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        total_monthly = 0.0
+        by_cat: dict[str, list] = {}
+        for b in bills:
+            by_cat.setdefault(b.category, []).append(b)
+            if b.is_recurring:
+                total_monthly += float(b.amount)
+
+        lines = ["*Bills & Subscriptions*\n"]
+        for cat, cat_bills in sorted(by_cat.items()):
+            lines.append(f"*{cat.title()}*")
+            for b in cat_bills:
+                due = f" — day {b.due_day}" if b.due_day else ""
+                autopay = " ⚡" if b.autopay else ""
+                recur = "/mo" if b.is_recurring else " (one-time)"
+                paid = f" _(last paid {b.last_paid_at.strftime('%b %d')})_" if b.last_paid_at else ""
+                lines.append(f"  [{b.id}] {b.name}: ${float(b.amount):.2f}{recur}{due}{autopay}{paid}")
+
+        lines.append(f"\n*Total recurring: ${total_monthly:.2f}/mo*")
+        lines.append("\nUse `/paid [id]` to mark a bill as paid.")
+        await self._safe_reply(update, "\n".join(lines))
+
+    async def cmd_paid(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /paid 3"""
+        args = context.args or []
+        if not args or not args[0].isdigit():
+            await update.message.reply_text("Usage: `/paid [bill_id]` — get IDs from /bills", parse_mode=ParseMode.MARKDOWN)
+            return
+        bill_id = int(args[0])
+        user = await self._get_or_create_user(update)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Bill).where(Bill.id == bill_id, Bill.user_id == user.id))
+            bill = result.scalar_one_or_none()
+            if not bill:
+                await update.message.reply_text(f"Bill {bill_id} not found.")
+                return
+            bill.last_paid_at = datetime.now(timezone.utc)
+            await session.commit()
+        await update.message.reply_text(f"*{bill.name}* marked as paid.", parse_mode=ParseMode.MARKDOWN)
+
+    async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Full system health check."""
+        from app.integrations.osiris_telegram import osiris_telegram
+        from app.integrations.osiris_bridge import osiris_bridge
+        from app.integrations.lumisnova_telegram import lumisnova_telegram
+
+        user = await self._get_or_create_user(update)
+        await update.message.chat.send_action("typing")
+
+        lines = ["*STARFIRE System Health*\n" + "━" * 26 + "\n"]
+
+        # OSIRIS
+        lines.append("*OSIRIS (Execution)*")
+        if osiris_bridge.is_available():
+            ok = await osiris_bridge.ping()
+            lines.append(f"  HTTP: {'online' if ok else 'UNREACHABLE'}")
+        else:
+            lines.append("  HTTP: not configured")
+        if osiris_telegram.is_available():
+            sent = await osiris_telegram.request_status(user.telegram_id)
+            lines.append(f"  Telegram (Argus Tower): {'ping sent to osiris_prime_bot' if sent else 'SEND FAILED'}")
+        else:
+            lines.append("  Telegram: not configured\n  _Set OSIRIS\\_TELEGRAM\\_CHAT\\_ID_")
+
+        # LUMISNOVA
+        lines.append("\n*LUMISNOVA (Data)*")
+        if lumisnova_telegram.is_available():
+            lines.append("  Telegram: connected")
+        else:
+            lines.append("  Telegram: not configured (using direct FMP)")
+
+        # Google
+        lines.append("\n*Google Workspace*")
+        lines.append(f"  Gmail + Drive: {'connected' if user.google_token_json else 'not connected — /connect_google'}")
+
+        # STARFIRE itself
+        lines.append(f"\n*STARFIRE*")
+        lines.append(f"  Status: online")
+        lines.append(f"  Brain: Claude (Anthropic)")
+
+        await self._safe_reply(update, "\n".join(lines))
+
     async def cmd_osiris(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Ping osiris_prime_bot via Telegram and show connection status."""
+        """Send a status ping to osiris_prime_bot via Argus Tower."""
         from app.integrations.osiris_telegram import osiris_telegram
         from app.integrations.osiris_bridge import osiris_bridge
 
         user = await self._get_or_create_user(update)
-        lines = ["*OSIRIS Status*\n"]
+        lines = ["*OSIRIS Bridge*\n"]
 
-        # HTTP bridge
         if osiris_bridge.is_available():
-            ping_ok = await osiris_bridge.ping()
-            lines.append(f"HTTP bridge: {'connected' if ping_ok else 'unreachable'}")
+            ok = await osiris_bridge.ping()
+            lines.append(f"HTTP: {'online' if ok else 'unreachable'}")
         else:
-            lines.append("HTTP bridge: not configured")
+            lines.append("HTTP: not configured")
 
-        # Telegram bridge
         if osiris_telegram.is_available():
             sent = await osiris_telegram.request_status(user.telegram_id)
-            lines.append(f"Telegram bridge: {'command sent to osiris_prime_bot' if sent else 'send failed'}")
-            if sent:
-                lines.append(f"_osiris_prime_bot will reply in your shared group_")
+            lines.append(f"Telegram: {'status request sent to Argus Tower' if sent else 'SEND FAILED'}")
         else:
-            lines.append(
-                "Telegram bridge: not configured\n"
-                "_Set OSIRIS\\_TELEGRAM\\_CHAT\\_ID in Railway to enable_"
-            )
+            lines.append("Telegram: not configured\n_Set OSIRIS\\_TELEGRAM\\_CHAT\\_ID in Railway_")
 
         await self._safe_reply(update, "\n".join(lines))
 
