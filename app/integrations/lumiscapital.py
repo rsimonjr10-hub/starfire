@@ -35,7 +35,9 @@ class LumiscapitalClient:
         self.timeout = 15
 
     def _params(self, **kwargs) -> dict:
-        return {"apikey": self.api_key, **kwargs}
+        # Strip trailing underscores used to avoid Python keyword conflicts (e.g. from_ → from)
+        cleaned = {k.rstrip("_"): v for k, v in kwargs.items()}
+        return {"apikey": self.api_key, **cleaned}
 
     async def _get(self, path: str, **params) -> dict | list | None:
         url = f"{FMP_BASE}{path}"
