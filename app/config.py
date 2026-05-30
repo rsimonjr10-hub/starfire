@@ -31,10 +31,16 @@ class Settings(BaseSettings):
     fmp_api_key: str = ""
 
     # Inter-service communication (Railway private network)
-    lumiscapital_service_url: str = ""     # e.g. http://lumisnovacapital-bot.railway.internal:8001
-    osiris_service_url: str = ""           # e.g. http://osiris.railway.internal:8002
+    lumiscapital_service_url: str = ""
+    osiris_service_url: str = ""
     inter_service_secret: str = "change-me-inter-service-secret"
 
+    # OSIRIS Telegram bridge (osiris_prime_bot)
+    osiris_bot_token: str = ""            # osiris_prime_bot token (for sending as OSIRIS)
+    osiris_telegram_chat_id: str = ""     # group chat_id where osiris_prime_bot listens
+
+    google_client_id: str = ""
+    google_client_secret: str = ""
     google_drive_credentials_json: Optional[str] = None
     google_drive_token_json: Optional[str] = None
 

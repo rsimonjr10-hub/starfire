@@ -1,6 +1,6 @@
 import structlog
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram.constants import ParseMode
 from app.config import settings
 from app.telegram.handlers import TelegramHandlers
@@ -18,34 +18,49 @@ async def get_application() -> Application:
             .token(settings.telegram_bot_token)
             .build()
         )
-        handlers = TelegramHandlers()
-        _application.add_handler(CommandHandler("start", handlers.cmd_start))
-        _application.add_handler(CommandHandler("portfolio", handlers.cmd_portfolio))
-        _application.add_handler(CommandHandler("tasks", handlers.cmd_tasks))
-        _application.add_handler(CommandHandler("spending", handlers.cmd_spending))
-        _application.add_handler(CommandHandler("goals", handlers.cmd_goals))
-        _application.add_handler(CommandHandler("risk", handlers.cmd_risk))
-        _application.add_handler(CommandHandler("help", handlers.cmd_help))
-        # Lumiscapital / FMP intelligence commands
-        _application.add_handler(CommandHandler("price", handlers.cmd_price))
-        _application.add_handler(CommandHandler("macro", handlers.cmd_macro))
-        _application.add_handler(CommandHandler("earnings", handlers.cmd_earnings))
-        _application.add_handler(CommandHandler("sectors", handlers.cmd_sectors))
-        _application.add_handler(CommandHandler("news", handlers.cmd_news))
-        _application.add_handler(CommandHandler("movers", handlers.cmd_movers))
-        _application.add_handler(CommandHandler("scout", handlers.cmd_scout))
-        _application.add_handler(CommandHandler("profile", handlers.cmd_profile))
-        _application.add_handler(CommandHandler("senate", handlers.cmd_senate))
-        _application.add_handler(CommandHandler("report", handlers.cmd_report))
+        h = TelegramHandlers()
+
+        # Core personal OS
+        _application.add_handler(CommandHandler("start", h.cmd_start))
+        _application.add_handler(CommandHandler("help", h.cmd_help))
+        _application.add_handler(CommandHandler("week", h.cmd_week))
+        _application.add_handler(CommandHandler("tasks", h.cmd_tasks))
+        _application.add_handler(CommandHandler("done", h.cmd_done))
+        _application.add_handler(CommandHandler("goals", h.cmd_goals))
+        _application.add_handler(CommandHandler("spending", h.cmd_spending))
+        _application.add_handler(CommandHandler("log", h.cmd_log))
+        _application.add_handler(CommandHandler("budget", h.cmd_budget))
+        _application.add_handler(CommandHandler("portfolio", h.cmd_portfolio))
+        _application.add_handler(CommandHandler("risk", h.cmd_risk))
+        _application.add_handler(CommandHandler("osiris", h.cmd_osiris))
+
+        # Google (Gmail + Drive)
+        _application.add_handler(CommandHandler("connect_google", h.cmd_connect_google))
+        _application.add_handler(CommandHandler("inbox", h.cmd_inbox))
+        _application.add_handler(CommandHandler("search_email", h.cmd_search_email))
+        _application.add_handler(CommandHandler("drive", h.cmd_drive))
+
+        # Market intelligence (Lumiscapital)
+        _application.add_handler(CommandHandler("price", h.cmd_price))
+        _application.add_handler(CommandHandler("macro", h.cmd_macro))
+        _application.add_handler(CommandHandler("earnings", h.cmd_earnings))
+        _application.add_handler(CommandHandler("sectors", h.cmd_sectors))
+        _application.add_handler(CommandHandler("news", h.cmd_news))
+        _application.add_handler(CommandHandler("movers", h.cmd_movers))
+        _application.add_handler(CommandHandler("scout", h.cmd_scout))
+        _application.add_handler(CommandHandler("profile", h.cmd_profile))
+        _application.add_handler(CommandHandler("senate", h.cmd_senate))
+
+        # Catch-all natural language → STARFIRE brain
         _application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, h.handle_message)
         )
+
         await _application.initialize()
     return _application
 
 
 async def send_notification(telegram_id: int, message: str) -> None:
-    """Send a proactive notification from STARFIRE to a user."""
     try:
         app = await get_application()
         await app.bot.send_message(

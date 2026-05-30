@@ -17,17 +17,18 @@ from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
 from app.integrations.lumiscapital import lumiscapital, formatter
-from app.integrations.lumiscapital_bridge import lumiscapital_bridge
 from app.integrations.osiris_bridge import osiris_bridge
+from app.integrations.osiris_telegram import osiris_telegram
 
 logger = structlog.get_logger(__name__)
 
-# Actions that fetch data from Lumiscapital before sending back to STARFIRE for analysis
 LUMISCAPITAL_ACTIONS = {
     "GET_PRICE", "GET_MACRO", "GET_EARNINGS", "GET_EARNINGS_DETAIL",
     "GET_NEWS", "GET_SECTOR", "GET_SCOUT", "GET_PROFILE",
     "GET_MOVERS", "GET_INSIDER", "GET_SENATE",
 }
+
+GOOGLE_ACTIONS = {"GET_EMAILS", "READ_EMAIL", "SEND_EMAIL", "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC"}
 
 
 class DecisionEngine:
@@ -54,9 +55,7 @@ class DecisionEngine:
 
         return reply
 
-    async def _handle_action(
-        self, user: User, action: dict, history: list, context: Optional[str]
-    ) -> str:
+    async def _handle_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
         action_type = action.get("action", "IGNORE")
 
         if action_type == "IGNORE":
@@ -71,46 +70,176 @@ class DecisionEngine:
         if action_type == "CREATE_TASK":
             return await self._create_task(user, action)
 
+        if action_type == "COMPLETE_TASK":
+            return await self._complete_task(user, action)
+
         if action_type == "UPDATE_GOAL":
             return await self._update_goal(user, action)
 
         if action_type == "RECORD_SPENDING":
             return await self._record_spending(user, action)
 
+        if action_type == "SET_BUDGET":
+            return await self._set_budget(user, action)
+
         if action_type in LUMISCAPITAL_ACTIONS:
             return await self._fetch_and_analyze(user, action, history, context)
+
+        if action_type in GOOGLE_ACTIONS:
+            return await self._handle_google_action(user, action, history, context)
 
         return action.get("message", "Action processed.")
 
     # ------------------------------------------------------------------ #
-    # LUMISCAPITAL — fetch data then feed back to STARFIRE for analysis
+    # GOOGLE — Gmail & Drive
     # ------------------------------------------------------------------ #
 
-    async def _fetch_and_analyze(
+    def _get_google_services(self, user: User):
+        """Returns (gmail_service, drive_service) or raises RuntimeError."""
+        if not user.google_token_json:
+            raise RuntimeError("Google not connected. Use /connect_google to link your account.")
+        from app.integrations.gmail_service import GmailService, DriveService
+        return GmailService(user.google_token_json), DriveService(user.google_token_json)
+
+    async def _handle_google_action(
         self, user: User, action: dict, history: list, context: Optional[str]
     ) -> str:
+        action_type = action.get("action")
+        try:
+            gmail, drive = self._get_google_services(user)
+        except RuntimeError as e:
+            return str(e)
+
+        try:
+            if action_type == "GET_EMAILS":
+                query = action.get("query", "unread")
+                limit = int(action.get("limit", 10))
+                if query == "unread":
+                    messages = gmail.list_unread(limit)
+                else:
+                    messages = gmail.search(query, limit)
+
+                if not messages:
+                    return "No emails found."
+
+                lines = [f"*{'Unread Emails' if query == 'unread' else 'Email Search: ' + query}*\n"]
+                for i, m in enumerate(messages, 1):
+                    lines.append(
+                        f"{i}. *{m.get('subject','(no subject)')}*\n"
+                        f"   From: {m.get('from','')}\n"
+                        f"   {m.get('snippet','')[:100]}…"
+                    )
+
+                formatted = "\n".join(lines)
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(
+                    action=action_type, data=formatted[:2000]
+                )
+                analysis = await self.brain.think(
+                    "Summarize these emails and flag anything important or urgent.",
+                    history, data_ctx,
+                )
+                if analysis["type"] == "chat" and analysis["content"].strip():
+                    return formatted + "\n\n---\n" + analysis["content"]
+                return formatted
+
+            if action_type == "READ_EMAIL":
+                message_id = action.get("message_id", "")
+                msg = gmail.read_message(message_id)
+                if not msg:
+                    return "Could not read that email."
+
+                text = (
+                    f"*From:* {msg['from']}\n"
+                    f"*Subject:* {msg['subject']}\n"
+                    f"*Date:* {msg['date']}\n\n"
+                    f"{msg['body']}"
+                )
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=text[:3000])
+                analysis = await self.brain.think(
+                    "Summarize this email and suggest a response if appropriate.",
+                    history, data_ctx,
+                )
+                if analysis["type"] == "chat" and analysis["content"].strip():
+                    return text[:1500] + "\n\n---\n*STARFIRE:*\n" + analysis["content"]
+                return text
+
+            if action_type == "SEND_EMAIL":
+                to = action.get("to", "")
+                subject = action.get("subject", "")
+                body = action.get("body", "")
+                thread_id = action.get("reply_to_thread")
+                if not to or not subject or not body:
+                    return "Missing to/subject/body for email."
+                success = gmail.send_email(to, subject, body, reply_to_thread=thread_id)
+                if success:
+                    return f"Email sent to {to}\nSubject: {subject}"
+                return "Failed to send email. Check that Google is connected and has Gmail send permissions."
+
+            if action_type == "SEARCH_DRIVE":
+                query = action.get("query", "")
+                files = drive.search(query)
+                if not files:
+                    return f"No Drive files found for: {query}"
+                lines = [f"*Drive Search: {query}*\n"]
+                for f in files:
+                    lines.append(
+                        f"• [{f.get('name','')}]({f.get('webViewLink','')})\n"
+                        f"  {f.get('mimeType','').split('.')[-1]} — {f.get('modifiedTime','')[:10]}"
+                    )
+                return "\n".join(lines)
+
+            if action_type == "READ_DOC":
+                file_id = action.get("file_id", "")
+                content = drive.read_doc(file_id)
+                if not content:
+                    return "Could not read that document."
+                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(
+                    action=action_type, data=content[:3000]
+                )
+                analysis = await self.brain.think(
+                    "Summarize this document concisely.",
+                    history, data_ctx,
+                )
+                if analysis["type"] == "chat":
+                    return analysis["content"]
+                return content[:2000]
+
+            if action_type == "CREATE_DOC":
+                title = action.get("title", "STARFIRE Document")
+                content = action.get("content", "")
+                link = drive.create_doc(title, content)
+                if link:
+                    return f"Document created: [{title}]({link})"
+                return "Failed to create document."
+
+        except Exception as e:
+            logger.error("google_action_error", action=action_type, error=str(e))
+            return f"Error with Google integration: {e}"
+
+        return action.get("message", "Done.")
+
+    # ------------------------------------------------------------------ #
+    # LUMISCAPITAL
+    # ------------------------------------------------------------------ #
+
+    async def _fetch_and_analyze(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
         action_type = action.get("action")
         raw_data = await self._fetch_lumiscapital(action_type, action)
 
         if raw_data is None:
-            return "I couldn't retrieve that data right now. The market data service may be unavailable — please check your FMP API key."
+            return "I couldn't retrieve that data right now. The market data service may be unavailable."
 
-        # Format data for immediate display
         formatted = self._format_lumiscapital_data(action_type, action, raw_data)
-
-        # Also re-engage STARFIRE brain with the data for deeper analysis
         data_context = (context or "") + DATA_RESULT_TEMPLATE.format(
-            action=action_type,
-            data=formatted[:2000],
+            action=action_type, data=formatted[:2000],
         )
         analysis = await self.brain.think(
-            f"You just fetched this data. Provide a concise analysis and key takeaways.",
-            history,
-            data_context,
+            "You just fetched this data. Provide a concise analysis and key takeaways.",
+            history, data_context,
         )
 
         if analysis["type"] == "chat" and analysis["content"].strip():
-            return formatted + "\n\n" + "---\n*STARFIRE Analysis*\n" + analysis["content"]
+            return formatted + "\n\n---\n*STARFIRE Analysis*\n" + analysis["content"]
         return formatted
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
@@ -190,86 +319,56 @@ class DecisionEngine:
         if action_type == "GET_PRICE":
             if isinstance(data, list):
                 return "\n\n".join(formatter.format_quote(q) for q in data)
-            if isinstance(data, dict):
-                return formatter.format_quote(data)
+            return formatter.format_quote(data)
 
         if action_type == "GET_MACRO":
-            return formatter.format_macro_summary(
-                data.get("indicators", []),
-                data.get("treasury"),
-            )
+            return formatter.format_macro_summary(data.get("indicators", []), data.get("treasury"))
 
         if action_type == "GET_EARNINGS":
             return formatter.format_earnings_calendar(data)
 
         if action_type == "GET_EARNINGS_DETAIL":
             symbol = data.get("symbol", "")
-            lines = [f"*{symbol} Earnings Detail*\n"]
-            surprises = data.get("surprises", [])
-            if surprises:
-                lines.append("*Historical Surprises:*")
-                for s in surprises[:5]:
-                    actual = s.get("actualEarningResult", "N/A")
-                    est = s.get("estimatedEarning", "N/A")
-                    lines.append(f"  {s.get('date','')[:7]}: Actual `{actual}` vs Est `{est}`")
-            estimates = data.get("estimates", [])
-            if estimates:
-                lines.append("\n*Analyst Estimates:*")
-                for e in estimates[:3]:
-                    lines.append(
-                        f"  {e.get('date','')[:7]}: EPS est `{e.get('estimatedEpsAvg','N/A')}` "
-                        f"| Rev est `${(e.get('estimatedRevenueAvg') or 0)/1e9:.2f}B`"
-                    )
+            lines = [f"*{symbol} Earnings*\n"]
+            for s in data.get("surprises", [])[:5]:
+                lines.append(f"  {s.get('date','')[:7]}: Actual `{s.get('actualEarningResult','N/A')}` vs Est `{s.get('estimatedEarning','N/A')}`")
+            for e in data.get("estimates", [])[:3]:
+                lines.append(f"  {e.get('date','')[:7]}: EPS `{e.get('estimatedEpsAvg','N/A')}` Rev `${(e.get('estimatedRevenueAvg') or 0)/1e9:.2f}B`")
             return "\n".join(lines)
 
         if action_type == "GET_NEWS":
             topic = action.get("topic", "general")
-            title = (
-                "Market News" if topic == "general"
-                else "Political / Senate News" if topic == "political"
-                else f"{topic.upper()} News"
-            )
+            title = "Market News" if topic == "general" else "Political News" if topic == "political" else f"{topic.upper()} News"
             return formatter.format_news(data, title)
 
         if action_type == "GET_SECTOR":
             return formatter.format_sector_performance(data)
 
         if action_type == "GET_SCOUT":
-            return formatter.format_scout_report(data, "Stock Scout Report")
+            return formatter.format_scout_report(data, "Stock Scout")
 
         if action_type == "GET_PROFILE":
             profile = data.get("profile")
-            metrics = data.get("metrics")
-            if not profile:
-                return "Company profile not found."
-            return formatter.format_company_profile(profile, metrics)
+            return "Company profile not found." if not profile else formatter.format_company_profile(profile, data.get("metrics"))
 
         if action_type == "GET_MOVERS":
-            mover_type = action.get("type", "gainers")
             titles = {"gainers": "Top Gainers", "losers": "Top Losers", "actives": "Most Active"}
-            title = titles.get(mover_type, "Market Movers")
-            return formatter.format_scout_report(data, title)
+            return formatter.format_scout_report(data, titles.get(action.get("type", "gainers"), "Movers"))
 
         if action_type == "GET_INSIDER":
             if not data:
                 return "No insider trades found."
             lines = [f"*Insider Trades — {action.get('symbol','').upper()}*\n"]
             for t in data[:10]:
-                lines.append(
-                    f"`{t.get('transactionDate','')[:10]}` {t.get('reportingName','')} — "
-                    f"{t.get('transactionType','')} `{t.get('securitiesTransacted','')}`"
-                )
+                lines.append(f"`{t.get('transactionDate','')[:10]}` {t.get('reportingName','')} — {t.get('transactionType','')} `{t.get('securitiesTransacted','')}`")
             return "\n".join(lines)
 
         if action_type == "GET_SENATE":
             if not data:
-                return "No Senate trading disclosures found."
-            lines = ["*Senate Trading Disclosures*\n"]
+                return "No Senate disclosures found."
+            lines = ["*Senate Trades*\n"]
             for t in data[:15]:
-                lines.append(
-                    f"`{t.get('transactionDate','')[:10]}` *{t.get('senator','')}* — "
-                    f"{t.get('asset_description','')} ({t.get('type','')})"
-                )
+                lines.append(f"`{t.get('transactionDate','')[:10]}` *{t.get('senator','')}* — {t.get('asset_description','')} ({t.get('type','')})")
             return "\n".join(lines)
 
         return str(data)[:1500]
@@ -289,65 +388,51 @@ class DecisionEngine:
         risk_result = await self.risk.validate_trade(user.id, symbol, side, size_pct)
         if not risk_result["allowed"]:
             return (
-                f"Trade BLOCKED by risk engine: {risk_result['reason']}\n\n"
-                "Your financial safety is my priority. Would you like to adjust the trade parameters?"
+                f"Trade blocked by risk engine: {risk_result['reason']}\n\n"
+                "Would you like to adjust the parameters?"
             )
 
-        execution = await self.osiris.execute_trade(
-            user_id=user.id,
-            symbol=symbol,
-            side=side,
-            size_pct=size_pct,
-            intent_payload=action,
-        )
-
-        # Use external OSIRIS service if configured, otherwise local executor
         if osiris_bridge.is_available():
             execution = await osiris_bridge.execute_trade(
-                user_id=user.id,
-                symbol=symbol,
-                side=side,
-                size_pct=size_pct,
-                intent_payload=action,
+                user_id=user.id, symbol=symbol, side=side,
+                size_pct=size_pct, intent_payload=action,
             )
         else:
             execution = await self.osiris.execute_trade(
-                user_id=user.id,
-                symbol=symbol,
-                side=side,
-                size_pct=size_pct,
-                intent_payload=action,
+                user_id=user.id, symbol=symbol, side=side,
+                size_pct=size_pct, intent_payload=action,
             )
+
+        # Also forward trade order to osiris_prime_bot via Telegram if configured
+        await osiris_telegram.send_trade_order(
+            user_telegram_id=user.telegram_id,
+            symbol=symbol,
+            side=side,
+            size_pct=size_pct,
+            extra={"intent": action},
+        )
 
         if execution["status"] == "FILLED":
             await self.publisher.publish(
                 "PORTFOLIO_EVENT",
-                {
-                    "user_id": user.id,
-                    "event": "TRADE_FILLED",
-                    "symbol": symbol,
-                    "side": side,
-                    "filled_price": execution["filled_price"],
-                },
+                {"user_id": user.id, "event": "TRADE_FILLED", "symbol": symbol, "side": side,
+                 "filled_price": execution["filled_price"]},
             )
             source = "OSIRIS (external)" if osiris_bridge.is_available() else "OSIRIS"
             return (
                 f"Trade executed by {source}.\n"
-                f"Symbol: {symbol}\n"
-                f"Side: {side}\n"
-                f"Filled at: ${execution['filled_price']:,.4f}\n"
+                f"{side} {symbol} @ ${execution['filled_price']:,.4f}\n"
                 f"Slippage: {execution['slippage']*100:.3f}%\n"
                 f"Order ID: {execution['order_id']}"
             )
-        return f"Trade could not be executed: {execution.get('error', 'Unknown error')}"
+        return f"Trade failed: {execution.get('error', 'Unknown error')}"
 
     # ------------------------------------------------------------------ #
-    # TASKS / GOALS / SPENDING
+    # TASKS / GOALS / SPENDING / BUDGET
     # ------------------------------------------------------------------ #
 
     async def _create_task(self, user: User, action: dict) -> str:
         from app.models.task import Task as TaskModel
-
         task = TaskModel(
             user_id=user.id,
             title=action.get("title", action.get("message", "New Task")),
@@ -359,19 +444,32 @@ class DecisionEngine:
                 task.due_at = datetime.fromisoformat(action["due"].replace("Z", "+00:00"))
             except ValueError:
                 pass
-
         self.db.add(task)
         await self.db.flush()
-        return f"Task created: **{task.title}**\nPriority: {task.priority}/10"
+        due_str = f" — due {task.due_at.strftime('%b %d')}" if task.due_at else ""
+        return f"Task added: *{task.title}*{due_str} (priority {task.priority}/10)"
+
+    async def _complete_task(self, user: User, action: dict) -> str:
+        task_id = action.get("task_id")
+        if not task_id:
+            return "Which task should I mark complete? Use /tasks to see IDs."
+        result = await self.db.execute(
+            select(Task).where(Task.id == task_id, Task.user_id == user.id)
+        )
+        task = result.scalar_one_or_none()
+        if not task:
+            return f"Task {task_id} not found."
+        task.status = "DONE"
+        task.completed_at = datetime.now(timezone.utc)
+        return f"Done! *{task.title}* marked complete."
 
     async def _update_goal(self, user: User, action: dict) -> str:
         from app.models.goal import Goal as GoalModel
-
         goal = GoalModel(
             user_id=user.id,
-            title=action.get("title", action.get("message", "New Goal")),
+            title=action.get("title", "New Goal"),
             description=action.get("description"),
-            goal_type=action.get("goal_type", "financial"),
+            goal_type=action.get("goal_type", "personal"),
             target_value=action.get("target_value"),
             unit=action.get("unit"),
         )
@@ -380,18 +478,12 @@ class DecisionEngine:
                 goal.target_date = datetime.fromisoformat(action["due"].replace("Z", "+00:00"))
             except ValueError:
                 pass
-
         self.db.add(goal)
         await self.db.flush()
-        return (
-            f"Goal set: **{goal.title}**\n"
-            f"Type: {goal.goal_type}\n"
-            f"Target: {goal.target_value} {goal.unit or ''}"
-        )
+        return f"Goal set: *{goal.title}*\nTarget: {goal.target_value} {goal.unit or ''}"
 
     async def _record_spending(self, user: User, action: dict) -> str:
         from app.models.spending import SpendingRecord
-
         record = SpendingRecord(
             user_id=user.id,
             category=action.get("category", "General"),
@@ -400,63 +492,68 @@ class DecisionEngine:
         )
         self.db.add(record)
         await self.db.flush()
-
         await self.publisher.publish(
             "SPENDING_EVENT",
             {"user_id": user.id, "category": record.category, "amount": float(record.amount)},
         )
-        return f"Spending recorded: ${record.amount:.2f} in {record.category}"
+        return f"Logged: ${record.amount:.2f} in *{record.category}*"
+
+    async def _set_budget(self, user: User, action: dict) -> str:
+        budgets = action.get("budgets", {})
+        if not budgets:
+            return "No budget data provided."
+        current = user.budget_json or {}
+        current.update(budgets)
+        user.budget_json = current
+        lines = [f"  {cat}: ${limit:.2f}/mo" for cat, limit in sorted(current.items())]
+        return "Budget updated:\n" + "\n".join(lines)
 
     # ------------------------------------------------------------------ #
-    # CONTEXT BUILDER
+    # CONTEXT
     # ------------------------------------------------------------------ #
 
     async def _build_context(self, user: User) -> Optional[str]:
         parts = []
 
         result = await self.db.execute(
-            select(PortfolioState)
-            .where(PortfolioState.user_id == user.id)
-            .order_by(PortfolioState.snapshot_at.desc())
-            .limit(1)
+            select(PortfolioState).where(PortfolioState.user_id == user.id)
+            .order_by(PortfolioState.snapshot_at.desc()).limit(1)
         )
         portfolio = result.scalar_one_or_none()
         if portfolio:
-            parts.append(
-                PORTFOLIO_CONTEXT_TEMPLATE.format(
-                    total_value=float(portfolio.total_value or 0),
-                    cash=float(portfolio.cash or 0),
-                    daily_pnl=float(portfolio.daily_pnl or 0),
-                    daily_pnl_pct=float(portfolio.daily_pnl_pct or 0),
-                    positions=str(portfolio.positions or {}),
-                )
-            )
+            parts.append(PORTFOLIO_CONTEXT_TEMPLATE.format(
+                total_value=float(portfolio.total_value or 0),
+                cash=float(portfolio.cash or 0),
+                daily_pnl=float(portfolio.daily_pnl or 0),
+                daily_pnl_pct=float(portfolio.daily_pnl_pct or 0),
+                positions=str(portfolio.positions or {}),
+            ))
 
         result = await self.db.execute(
-            select(Task)
-            .where(Task.user_id == user.id, Task.status == "PENDING")
-            .order_by(Task.priority.desc())
-            .limit(5)
+            select(Task).where(Task.user_id == user.id, Task.status == "PENDING")
+            .order_by(Task.priority.desc()).limit(5)
         )
         tasks = result.scalars().all()
         if tasks:
             task_lines = "\n".join(
-                f"- [{t.priority}] {t.title}" + (f" (due {t.due_at.date()})" if t.due_at else "")
+                f"- [id:{t.id}] [{t.priority}] {t.title}" + (f" (due {t.due_at.date()})" if t.due_at else "")
                 for t in tasks
             )
             parts.append(TASK_CONTEXT_TEMPLATE.format(count=len(tasks), tasks=task_lines))
 
         result = await self.db.execute(
-            select(Goal)
-            .where(Goal.user_id == user.id, Goal.status == "ACTIVE")
-            .limit(5)
+            select(Goal).where(Goal.user_id == user.id, Goal.status == "ACTIVE").limit(5)
         )
         goals = result.scalars().all()
         if goals:
             goal_lines = "\n".join(
-                f"- {g.title}: {g.current_value}/{g.target_value} {g.unit or ''}"
-                for g in goals
+                f"- {g.title}: {g.current_value}/{g.target_value} {g.unit or ''}" for g in goals
             )
             parts.append(GOAL_CONTEXT_TEMPLATE.format(goals=goal_lines))
+
+        if user.google_token_json:
+            parts.append("## Google Integration: Connected (Gmail + Drive available)")
+        else:
+            parts.append("## Google Integration: Not connected. User can type /connect_google to link Gmail and Drive.")
 
         return "\n".join(parts) if parts else None
