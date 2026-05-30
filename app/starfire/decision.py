@@ -179,43 +179,46 @@ class DecisionEngine:
     ) -> str:
         query = action.get("query", "portfolio_summary")
 
-        # Notify group and send portfolio summary via @Lumiscapital_bot
-        if lumisnova_telegram.is_available():
-            await lumisnova_telegram.notify_command(query, action, user.telegram_id)
-            if "portfolio" in query:
-                result = await self.db.execute(
-                    select(PortfolioState).where(PortfolioState.user_id == user.id)
-                    .order_by(PortfolioState.snapshot_at.desc()).limit(1)
-                )
-                portfolio = result.scalar_one_or_none()
-                if portfolio:
-                    summary = (
-                        f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
-                        f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
-                        f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)"
-                    )
-                    await lumisnova_telegram.send_portfolio_summary(user.telegram_id, summary)
-                    return "Portfolio summary sent via LUMISNOVA."
-            return f"Query routed to LUMISNOVA: _{query}_"
+        # Always answer from local DB — @Lumiscapital_bot can't respond autonomously
+        result = await self.db.execute(
+            select(PortfolioState).where(PortfolioState.user_id == user.id)
+            .order_by(PortfolioState.snapshot_at.desc()).limit(1)
+        )
+        portfolio = result.scalar_one_or_none()
 
-        # Fallback: serve from direct FMP / local DB
-        if "portfolio" in query:
-            result = await self.db.execute(
-                select(PortfolioState).where(PortfolioState.user_id == user.id)
-                .order_by(PortfolioState.snapshot_at.desc()).limit(1)
+        # Check for a specific position in the query (e.g. position_IREN)
+        symbol = None
+        if query.startswith("position_"):
+            symbol = query.replace("position_", "").upper()
+        elif action.get("symbol"):
+            symbol = action.get("symbol", "").upper()
+
+        if symbol and portfolio and portfolio.positions:
+            positions = portfolio.positions if isinstance(portfolio.positions, dict) else {}
+            pos = positions.get(symbol) or positions.get(symbol.lower())
+            if pos:
+                qty = pos.get("qty") or pos.get("quantity") or pos.get("shares", 0)
+                avg = pos.get("avg_price") or pos.get("average_price", 0)
+                summary = f"You hold *{qty}* shares of *{symbol}* @ avg ${float(avg):,.2f}"
+            else:
+                summary = f"No position in *{symbol}* found in your tracked portfolio."
+            if lumisnova_telegram.is_available() and user.telegram_id:
+                await lumisnova_telegram.send_data_to_user(user.telegram_id, f"*LUMISNOVA — Position*\n\n{summary}")
+                return "_Position data sent via LUMISNOVA._"
+            return summary
+
+        if portfolio:
+            summary = (
+                f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
+                f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
+                f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)"
             )
-            portfolio = result.scalar_one_or_none()
-            if portfolio:
-                return (
-                    f"Portfolio (local snapshot):\n"
-                    f"Value: ${float(portfolio.total_value or 0):,.2f}\n"
-                    f"Cash: ${float(portfolio.cash or 0):,.2f}\n"
-                    f"Daily P&L: ${float(portfolio.daily_pnl or 0):,.2f} ({float(portfolio.daily_pnl_pct or 0):.2f}%)\n\n"
-                    f"_Connect LUMISNOVA for live portfolio data._"
-                )
-            return "No portfolio data yet."
+            if lumisnova_telegram.is_available() and user.telegram_id:
+                await lumisnova_telegram.send_portfolio_summary(user.telegram_id, summary)
+                return "_Portfolio summary sent via LUMISNOVA._"
+            return f"Portfolio:\n{summary}"
 
-        return "LUMISNOVA not connected. Set `LUMISNOVA_BOT_TOKEN` in Railway."
+        return "No portfolio data tracked yet. Trades you execute via OSIRIS will be recorded here."
 
     # ─────────────────────────────────────────────────────────────────────
     # MARKET DATA — direct FMP (GET_* actions)
