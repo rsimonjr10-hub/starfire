@@ -30,8 +30,6 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("spending", h.cmd_spending))
         _application.add_handler(CommandHandler("log", h.cmd_log))
         _application.add_handler(CommandHandler("budget", h.cmd_budget))
-        _application.add_handler(CommandHandler("portfolio", h.cmd_portfolio))
-        _application.add_handler(CommandHandler("risk", h.cmd_risk))
         _application.add_handler(CommandHandler("bills", h.cmd_bills))
         _application.add_handler(CommandHandler("paid", h.cmd_paid))
         _application.add_handler(CommandHandler("health", h.cmd_health))
@@ -42,17 +40,6 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("inbox", h.cmd_inbox))
         _application.add_handler(CommandHandler("search_email", h.cmd_search_email))
         _application.add_handler(CommandHandler("drive", h.cmd_drive))
-
-        # Market intelligence (Lumiscapital)
-        _application.add_handler(CommandHandler("price", h.cmd_price))
-        _application.add_handler(CommandHandler("macro", h.cmd_macro))
-        _application.add_handler(CommandHandler("earnings", h.cmd_earnings))
-        _application.add_handler(CommandHandler("sectors", h.cmd_sectors))
-        _application.add_handler(CommandHandler("news", h.cmd_news))
-        _application.add_handler(CommandHandler("movers", h.cmd_movers))
-        _application.add_handler(CommandHandler("scout", h.cmd_scout))
-        _application.add_handler(CommandHandler("profile", h.cmd_profile))
-        _application.add_handler(CommandHandler("senate", h.cmd_senate))
 
         # Catch-all natural language → STARFIRE brain
         _application.add_handler(
