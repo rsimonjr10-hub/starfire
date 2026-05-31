@@ -35,6 +35,11 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("health", h.cmd_health))
         _application.add_handler(CommandHandler("osiris", h.cmd_osiris))
 
+        # Bot ticketing system
+        _application.add_handler(CommandHandler("tickets", h.cmd_tickets))
+        _application.add_handler(CommandHandler("checkup", h.cmd_checkup))
+        _application.add_handler(CommandHandler("done_ticket", h.cmd_done_ticket))
+
         # Quick entry commands
         _application.add_handler(CommandHandler("newtask", h.cmd_newtask))
         _application.add_handler(CommandHandler("setreminder", h.cmd_setreminder))

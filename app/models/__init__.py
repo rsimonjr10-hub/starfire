@@ -6,6 +6,7 @@ from app.models.task import Task
 from app.models.goal import Goal
 from app.models.bill import Bill
 from app.models.event_log import EventLog, ExecutionLog
+from app.models.ticket import BotTicket
 
 __all__ = [
     "User",
@@ -17,4 +18,5 @@ __all__ = [
     "Bill",
     "EventLog",
     "ExecutionLog",
+    "BotTicket",
 ]

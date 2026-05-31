@@ -13,7 +13,7 @@ from app.starfire.prompts import (
     BILLS_CONTEXT_TEMPLATE,
     DATA_RESULT_TEMPLATE,
 )
-from app.models import User, PortfolioState, Task, Goal, Bill
+from app.models import User, PortfolioState, Task, Goal, Bill, BotTicket
 from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
@@ -75,6 +75,14 @@ class DecisionEngine:
             return await self._message_lumisnova(user, action)
         if action_type == "MESSAGE_OSIRIS":
             return await self._message_osiris(user, action)
+
+        # ── TICKETING ───────────────────────────────────────────────────
+        if action_type == "ASSIGN_TICKET":
+            return await self._assign_ticket(user, action)
+        if action_type == "CLOSE_TICKET":
+            return await self._close_ticket(user, action)
+        if action_type == "CHECK_TICKETS":
+            return await self._check_tickets(user, action)
 
         # ── OSIRIS ROUTING ──────────────────────────────────────────────
         if action_type == "ROUTE_TRADE":
@@ -141,6 +149,125 @@ class DecisionEngine:
         if sent:
             return f"Relayed to OSIRIS in Argus Tower:\n_{msg}_"
         return "Couldn't reach Argus Tower. Check OSIRIS bridge in /health."
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TICKETING — delegate tasks to bots and track completion
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _assign_ticket(self, user: User, action: dict) -> str:
+        assigned_to = action.get("assigned_to", "OSIRIS").upper()
+        title = action.get("title", "")
+        if not title:
+            return "Ticket needs a title."
+
+        ticket = BotTicket(
+            user_id=user.id,
+            title=title,
+            description=action.get("description"),
+            assigned_to=assigned_to,
+            priority=action.get("priority", 5),
+            context=action.get("context"),
+            status="QUEUED",
+        )
+        self.db.add(ticket)
+        await self.db.flush()
+
+        # Dispatch to the right bot via Telegram
+        sent = False
+        payload = {
+            "ticket_id": ticket.id,
+            "title": title,
+            "description": action.get("description", ""),
+            "priority": ticket.priority,
+            "context": ticket.context or {},
+        }
+        if assigned_to == "OSIRIS":
+            sent = await osiris_telegram.send_command("TICKET", payload, user.telegram_id)
+        elif assigned_to == "LUMISNOVA":
+            sent = await osiris_telegram.send_command(
+                "LUMISNOVA_TICKET",
+                {"message": f"Ticket #{ticket.id}: {title}", **payload},
+                user.telegram_id,
+            )
+
+        if sent:
+            ticket.status = "SENT"
+        label = "✓ sent" if sent else "queued (bridge unavailable)"
+        return (
+            f"Ticket #{ticket.id} assigned to *{assigned_to}* — {label}\n"
+            f"*{title}*"
+            + (f"\n_{action.get('description')}_" if action.get("description") else "")
+        )
+
+    async def _close_ticket(self, user: User, action: dict) -> str:
+        ticket_id = action.get("ticket_id")
+        if not ticket_id:
+            return "Which ticket? Give me an ID."
+        result = await self.db.execute(
+            select(BotTicket).where(BotTicket.id == ticket_id, BotTicket.user_id == user.id)
+        )
+        ticket = result.scalar_one_or_none()
+        if not ticket:
+            return f"Ticket #{ticket_id} not found."
+        ticket.status = "DONE"
+        ticket.completed_at = datetime.now(timezone.utc)
+        return f"Ticket #{ticket_id} closed: *{ticket.title}* ✓"
+
+    async def _check_tickets(self, user: User, action: dict) -> str:
+        """Ping each bot about their open tickets and return a queue summary."""
+        result = await self.db.execute(
+            select(BotTicket).where(
+                BotTicket.user_id == user.id,
+                BotTicket.status.in_(["QUEUED", "SENT"]),
+            ).order_by(BotTicket.priority.desc(), BotTicket.created_at)
+        )
+        tickets = result.scalars().all()
+
+        if not tickets:
+            return "No open tickets. All bots are clear."
+
+        now = datetime.now(timezone.utc)
+        lines = ["*Open Bot Tickets*\n"]
+        osiris_ids, lumisnova_ids = [], []
+
+        for t in tickets:
+            age = (now - t.created_at).seconds // 3600 if t.created_at else 0
+            age_str = f"{age}h ago" if age else "just now"
+            lines.append(
+                f"[#{t.id}] *{t.assigned_to}* — {t.title}\n"
+                f"  Status: `{t.status}` | Priority: {t.priority} | Created: {age_str}"
+            )
+            t.last_checked_at = now
+            if t.assigned_to == "OSIRIS":
+                osiris_ids.append(t.id)
+            elif t.assigned_to == "LUMISNOVA":
+                lumisnova_ids.append(t.id)
+
+        # Ping the bots
+        pinged = []
+        if osiris_ids:
+            ok = await osiris_telegram.send_command(
+                "TICKET_STATUS_REQUEST",
+                {"ticket_ids": osiris_ids, "from_user": user.telegram_id},
+                user.telegram_id,
+            )
+            if ok:
+                pinged.append(f"OSIRIS (tickets {osiris_ids})")
+        if lumisnova_ids:
+            ok = await osiris_telegram.send_command(
+                "LUMISNOVA_TICKET_STATUS",
+                {"ticket_ids": lumisnova_ids, "from_user": user.telegram_id},
+                user.telegram_id,
+            )
+            if ok:
+                pinged.append(f"LUMISNOVA (tickets {lumisnova_ids})")
+
+        summary = "\n".join(lines)
+        if pinged:
+            summary += f"\n\n_Pinged: {', '.join(pinged)} — awaiting response._"
+        else:
+            summary += "\n\n_Bridges unavailable — couldn't ping bots._"
+        return summary
 
     # ─────────────────────────────────────────────────────────────────────
     # OSIRIS — trade routing

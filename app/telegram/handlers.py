@@ -6,7 +6,7 @@ from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
 
 from app.database import AsyncSessionLocal
-from app.models import User, PortfolioState, Task, Goal, SpendingRecord, Bill
+from app.models import User, PortfolioState, Task, Goal, SpendingRecord, Bill, BotTicket
 from app.starfire.decision import DecisionEngine
 from app.integrations.lumiscapital import lumiscapital, formatter
 from app.config import settings
@@ -634,6 +634,143 @@ class TelegramHandlers:
             bill.last_paid_at = datetime.now(timezone.utc)
             await session.commit()
         await update.message.reply_text(f"*{bill.name}* marked as paid.", parse_mode=ParseMode.MARKDOWN)
+
+    async def cmd_tickets(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show all open bot tickets grouped by assignee."""
+        user = await self._get_or_create_user(update)
+        args = context.args or []
+        # Optional filter: /tickets osiris | /tickets lumisnova | /tickets all | /tickets done
+        filter_arg = args[0].upper() if args else "OPEN"
+
+        async with AsyncSessionLocal() as session:
+            if filter_arg == "DONE":
+                stmt = select(BotTicket).where(
+                    BotTicket.user_id == user.id,
+                    BotTicket.status == "DONE",
+                ).order_by(BotTicket.completed_at.desc()).limit(20)
+            elif filter_arg in ("OSIRIS", "LUMISNOVA"):
+                stmt = select(BotTicket).where(
+                    BotTicket.user_id == user.id,
+                    BotTicket.assigned_to == filter_arg,
+                    BotTicket.status.in_(["QUEUED", "SENT"]),
+                ).order_by(BotTicket.priority.desc(), BotTicket.created_at)
+            else:
+                stmt = select(BotTicket).where(
+                    BotTicket.user_id == user.id,
+                    BotTicket.status.in_(["QUEUED", "SENT"]),
+                ).order_by(BotTicket.priority.desc(), BotTicket.created_at)
+
+            result = await session.execute(stmt)
+            tickets = result.scalars().all()
+
+        if not tickets:
+            await update.message.reply_text(
+                "No open tickets." if filter_arg != "DONE" else "No completed tickets yet."
+            )
+            return
+
+        # Group by assignee
+        groups: dict[str, list] = {}
+        for t in tickets:
+            groups.setdefault(t.assigned_to, []).append(t)
+
+        lines = [f"*Bot Ticket Queue*\n{'━' * 22}\n"]
+        status_icons = {"QUEUED": "🕐", "SENT": "📤", "DONE": "✅", "FAILED": "❌"}
+        for bot, bot_tickets in groups.items():
+            lines.append(f"*{bot}* ({len(bot_tickets)} ticket{'s' if len(bot_tickets) != 1 else ''})")
+            for t in bot_tickets:
+                icon = status_icons.get(t.status, "•")
+                due = f" | done {t.completed_at.strftime('%b %d')}" if t.completed_at else ""
+                lines.append(f"  {icon} #{t.id} p{t.priority} — {t.title}{due}")
+            lines.append("")
+
+        lines.append("_/checkup to ping bots for status | /done\\_ticket [id] to close_")
+        await self._safe_reply(update, "\n".join(lines))
+
+    async def cmd_checkup(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Ping all bots about their open tickets and show the queue."""
+        user = await self._get_or_create_user(update)
+        await update.message.chat.send_action("typing")
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BotTicket).where(
+                    BotTicket.user_id == user.id,
+                    BotTicket.status.in_(["QUEUED", "SENT"]),
+                ).order_by(BotTicket.priority.desc(), BotTicket.created_at)
+            )
+            tickets = result.scalars().all()
+
+            if not tickets:
+                await update.message.reply_text("All bots are clear — no open tickets.")
+                return
+
+            from app.integrations.osiris_telegram import osiris_telegram
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+            osiris_ids, lumisnova_ids = [], []
+            lines = ["*Checkup — Open Tickets*\n"]
+
+            for t in tickets:
+                age_h = int((now - t.created_at).total_seconds() // 3600) if t.created_at else 0
+                age_str = f"{age_h}h" if age_h else "just now"
+                lines.append(f"#{t.id} *{t.assigned_to}* p{t.priority} — {t.title} ({age_str})")
+                t.last_checked_at = now
+                if t.assigned_to == "OSIRIS":
+                    osiris_ids.append(t.id)
+                elif t.assigned_to == "LUMISNOVA":
+                    lumisnova_ids.append(t.id)
+
+            pinged = []
+            if osiris_ids:
+                ok = await osiris_telegram.send_command(
+                    "TICKET_STATUS_REQUEST",
+                    {"ticket_ids": osiris_ids, "from_user": user.telegram_id},
+                    user.telegram_id,
+                )
+                if ok:
+                    pinged.append(f"OSIRIS ({len(osiris_ids)} tickets)")
+            if lumisnova_ids:
+                ok = await osiris_telegram.send_command(
+                    "LUMISNOVA_TICKET_STATUS",
+                    {"ticket_ids": lumisnova_ids, "from_user": user.telegram_id},
+                    user.telegram_id,
+                )
+                if ok:
+                    pinged.append(f"LUMISNOVA ({len(lumisnova_ids)} tickets)")
+
+            await session.commit()
+
+        suffix = f"\n\n_Pinged: {', '.join(pinged)}_" if pinged else "\n\n_Couldn't reach bots — check /health_"
+        await self._safe_reply(update, "\n".join(lines) + suffix)
+
+    async def cmd_done_ticket(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Close a bot ticket: /done_ticket [id]"""
+        args = context.args or []
+        if not args or not args[0].isdigit():
+            await update.message.reply_text("Usage: `/done_ticket [ticket_id]`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        ticket_id = int(args[0])
+        user = await self._get_or_create_user(update)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BotTicket).where(BotTicket.id == ticket_id, BotTicket.user_id == user.id)
+            )
+            ticket = result.scalar_one_or_none()
+            if not ticket:
+                await update.message.reply_text(f"Ticket #{ticket_id} not found.")
+                return
+            ticket.status = "DONE"
+            ticket.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+
+        await update.message.reply_text(
+            f"Ticket #{ticket_id} closed ✓\n*{ticket.title}*",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
     async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Full system health check."""
