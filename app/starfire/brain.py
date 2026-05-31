@@ -2,6 +2,7 @@ import json
 import re
 import structlog
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 from anthropic import AsyncAnthropic
 from app.config import settings
@@ -18,12 +19,13 @@ class StarfireBrain:
         self.model = "claude-opus-4-8"
 
     def _build_system(self, context: Optional[str] = None) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(ZoneInfo("America/New_York"))
+        tz_label = now.strftime("%Z")  # EDT or EST depending on daylight saving
         date_block = (
-            f"## Current Date & Time (UTC — always exact, never guess)\n"
+            f"## Current Date & Time ({tz_label} — always exact, never guess)\n"
             f"Date: {now.strftime('%A, %B %d, %Y')}\n"
-            f"Time: {now.strftime('%H:%M')} UTC\n"
-            f"ISO:  {now.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            f"Time: {now.strftime('%I:%M %p')} {tz_label}\n"
+            f"ISO:  {now.strftime('%Y-%m-%dT%H:%M:%S')}{now.strftime('%z')}"
         )
         parts = [date_block, STARFIRE_SYSTEM_PROMPT]
         if context:
