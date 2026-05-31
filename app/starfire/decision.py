@@ -34,8 +34,14 @@ GOOGLE_ACTIONS = {
     "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
     "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC",
     "GET_CALENDAR", "CREATE_EVENT",
+    # Sheets — full capability set
     "UPDATE_SHEET", "GET_SHEET_PL",
     "CREATE_SHEET", "DELETE_SHEET_ROW", "DELETE_SHEET",
+    "SHEET_FORMAT", "SHEET_UPDATE_CELL", "SHEET_UPDATE_RANGE",
+    "SHEET_READ", "SHEET_FIND", "SHEET_FIND_REPLACE",
+    "SHEET_INSERT_ROW", "SHEET_CLEAR", "SHEET_DELETE_TAB",
+    "SHEET_DELETE_COLUMNS", "SHEET_ADD_TAB", "SHEET_RENAME_TAB",
+    "SHEET_FREEZE", "SHEET_AUTO_RESIZE", "SHEET_CONDITIONAL_FORMAT",
 }
 
 
@@ -825,6 +831,197 @@ class DecisionEngine:
             except Exception as e:
                 logger.error("delete_sheet_error", error=str(e))
                 return f"Sheets error: {e}"
+
+        # ── ADVANCED SHEETS OPERATIONS ────────────────────────────────────
+        if action_type in {
+            "SHEET_FORMAT", "SHEET_UPDATE_CELL", "SHEET_UPDATE_RANGE",
+            "SHEET_READ", "SHEET_FIND", "SHEET_FIND_REPLACE",
+            "SHEET_INSERT_ROW", "SHEET_CLEAR", "SHEET_DELETE_TAB",
+            "SHEET_DELETE_COLUMNS", "SHEET_ADD_TAB", "SHEET_RENAME_TAB",
+            "SHEET_FREEZE", "SHEET_AUTO_RESIZE", "SHEET_CONDITIONAL_FORMAT",
+        }:
+            return await self._sheets_op(user, action, action_type)
+
+        return "Done."
+
+    async def _resolve_sheet(self, user: User, action: dict):
+        """Resolve spreadsheet ID from action. Returns (sheets, sheet_id) or raises."""
+        sheets = self._sheets(user)
+        sheet_id = action.get("sheet_id")
+        if not sheet_id and action.get("sheet_name"):
+            sheet_id = sheets.find_spreadsheet_by_name(action["sheet_name"])
+            if not sheet_id:
+                return sheets, None
+        sheet_id = sheet_id or (user.preferences or {}).get("options_sheet_id")
+        return sheets, sheet_id
+
+    async def _sheets_op(self, user: User, action: dict, action_type: str) -> str:
+        if not self._google_connected(user):
+            return "Google not connected. Use /connect_google."
+        try:
+            sheets, sheet_id = await self._resolve_sheet(user, action)
+            if not sheet_id:
+                name = action.get("sheet_name", "")
+                return (
+                    f"Couldn't find sheet *{name}*." if name
+                    else "No sheet specified. Tell me the sheet name."
+                )
+            tab = action.get("tab")
+
+            # ── FORMAT ────────────────────────────────────────────────────
+            if action_type == "SHEET_FORMAT":
+                style = action.get("style", "pl")
+                if style == "pl":
+                    ok = sheets.apply_full_pl_formatting(
+                        sheet_id, tab=tab,
+                        header_bg=action.get("header_bg", "#1a3a5c"),
+                        header_fg=action.get("header_fg", "#ffffff"),
+                        positive_color=action.get("positive_color", "#b7e1cd"),
+                        negative_color=action.get("negative_color", "#f4cccc"),
+                    )
+                    return "Sheet formatted ✓ — dark header, currency columns, green/red P/L, frozen row." if ok else "Formatting failed."
+                # Custom range format
+                rng = action.get("range")
+                if not rng:
+                    return "Specify a range (e.g. 'A1:H1') for custom formatting."
+                ok = sheets.format_range(
+                    sheet_id, rng, tab=tab,
+                    bg=action.get("bg"),
+                    bold=action.get("bold", False),
+                    fg=action.get("fg"),
+                    font_size=action.get("font_size"),
+                    h_align=action.get("h_align"),
+                    number_format=action.get("number_format"),
+                )
+                return f"Formatted *{rng}* ✓" if ok else "Formatting failed."
+
+            # ── CONDITIONAL FORMAT ─────────────────────────────────────────
+            if action_type == "SHEET_CONDITIONAL_FORMAT":
+                rng = action.get("range", "G2:G1000")
+                ok = sheets.add_conditional_formatting(
+                    sheet_id, rng, tab=tab,
+                    positive_color=action.get("positive_color", "#b7e1cd"),
+                    negative_color=action.get("negative_color", "#f4cccc"),
+                )
+                return f"Conditional formatting added to *{rng}* ✓" if ok else "Failed."
+
+            # ── UPDATE CELL ───────────────────────────────────────────────
+            if action_type == "SHEET_UPDATE_CELL":
+                cell = action.get("cell", "")
+                value = action.get("value", "")
+                if not cell:
+                    return "Which cell? (e.g. B3)"
+                ok = sheets.update_cell(sheet_id, cell, value, tab=tab)
+                return f"Cell *{cell}* updated to `{value}` ✓" if ok else "Update failed."
+
+            # ── UPDATE RANGE ──────────────────────────────────────────────
+            if action_type == "SHEET_UPDATE_RANGE":
+                rng = action.get("range", "")
+                values = action.get("values", [])
+                if not rng or not values:
+                    return "Need range and values."
+                ok = sheets.update_range(sheet_id, rng, values)
+                return f"Range *{rng}* updated ✓" if ok else "Update failed."
+
+            # ── READ ──────────────────────────────────────────────────────
+            if action_type == "SHEET_READ":
+                rng = action.get("range", "")
+                cell = action.get("cell", "")
+                if cell:
+                    val = sheets.read_cell(sheet_id, cell if "!" in cell else f"{tab or 'Sheet1'}!{cell}")
+                    return f"*{cell}* = `{val}`" if val is not None else f"*{cell}* is empty."
+                if rng:
+                    rows = sheets.read_range(sheet_id, rng)
+                    if not rows:
+                        return "Range is empty."
+                    lines = [" | ".join(str(c) for c in row) for row in rows[:20]]
+                    return f"*{rng}*\n```\n" + "\n".join(lines) + "\n```"
+                return "Specify a cell or range to read."
+
+            # ── FIND ──────────────────────────────────────────────────────
+            if action_type == "SHEET_FIND":
+                symbol = action.get("symbol") or action.get("value", "")
+                col = action.get("column", 1)  # default Symbol column
+                if not symbol:
+                    return "What should I search for?"
+                matches = sheets.find_rows(sheet_id, col, symbol, tab=tab)
+                if not matches:
+                    return f"No rows found matching *{symbol}*."
+                lines = [f"Row {m['_row_index']+1}: {m['date']} | {m['symbol']} | {m['type']} | P/L {m['pl']}" for m in matches[:15]]
+                return f"*{len(matches)} match{'es' if len(matches) != 1 else ''}*\n" + "\n".join(lines)
+
+            # ── FIND & REPLACE ────────────────────────────────────────────
+            if action_type == "SHEET_FIND_REPLACE":
+                find = action.get("find", "")
+                replace = action.get("replace", "")
+                if not find:
+                    return "What should I replace?"
+                count = sheets.find_and_replace(sheet_id, find, replace, tab=tab)
+                return f"Replaced {count} occurrence{'s' if count != 1 else ''} of *{find}* → *{replace}* ✓"
+
+            # ── INSERT ROW ────────────────────────────────────────────────
+            if action_type == "SHEET_INSERT_ROW":
+                row_index = action.get("row", 2)
+                values = action.get("values", [])
+                ok = sheets.insert_row(sheet_id, row_index, values, tab=tab)
+                return f"Row inserted at position {row_index} ✓" if ok else "Insert failed."
+
+            # ── CLEAR ─────────────────────────────────────────────────────
+            if action_type == "SHEET_CLEAR":
+                rng = action.get("range", "")
+                if not rng:
+                    return "Which range should I clear? (e.g. A2:H50)"
+                ok = sheets.clear_range(sheet_id, rng)
+                return f"Cleared *{rng}* ✓" if ok else "Clear failed."
+
+            # ── DELETE TAB ────────────────────────────────────────────────
+            if action_type == "SHEET_DELETE_TAB":
+                tab_name = action.get("tab", "")
+                if not tab_name:
+                    return "Which tab should I delete?"
+                ok = sheets.delete_tab(sheet_id, tab_name)
+                return f"Tab *{tab_name}* deleted ✓" if ok else "Delete failed — tab not found."
+
+            # ── DELETE COLUMNS ────────────────────────────────────────────
+            if action_type == "SHEET_DELETE_COLUMNS":
+                start = action.get("start_col", 0)
+                end = action.get("end_col", start + 1)
+                ok = sheets.delete_columns(sheet_id, start, end, tab=tab)
+                return f"Column(s) {start}–{end} deleted ✓" if ok else "Delete failed."
+
+            # ── ADD TAB ───────────────────────────────────────────────────
+            if action_type == "SHEET_ADD_TAB":
+                tab_name = action.get("tab", "")
+                if not tab_name:
+                    return "What should I name the new tab?"
+                ok = sheets.add_tab(sheet_id, tab_name, with_headers=action.get("with_headers", True))
+                return f"Tab *{tab_name}* added ✓" if ok else "Failed — tab may already exist."
+
+            # ── RENAME TAB ────────────────────────────────────────────────
+            if action_type == "SHEET_RENAME_TAB":
+                old = action.get("old_name") or action.get("tab", "")
+                new = action.get("new_name", "")
+                if not old or not new:
+                    return "Need old and new tab names."
+                ok = sheets.rename_tab(sheet_id, old, new)
+                return f"Tab renamed *{old}* → *{new}* ✓" if ok else "Rename failed."
+
+            # ── FREEZE ────────────────────────────────────────────────────
+            if action_type == "SHEET_FREEZE":
+                ok = sheets.freeze(sheet_id, rows=action.get("rows", 1), cols=action.get("cols", 0), tab=tab)
+                return "Rows frozen ✓" if ok else "Freeze failed."
+
+            # ── AUTO RESIZE ───────────────────────────────────────────────
+            if action_type == "SHEET_AUTO_RESIZE":
+                ok = sheets.auto_resize_columns(
+                    sheet_id, start_col=action.get("start_col", 0),
+                    end_col=action.get("end_col", 8), tab=tab,
+                )
+                return "Columns auto-resized ✓" if ok else "Resize failed."
+
+        except Exception as e:
+            logger.error("sheets_op_error", action=action_type, error=str(e))
+            return f"Sheets error: {e}"
 
         return "Done."
 

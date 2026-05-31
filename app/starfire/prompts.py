@@ -48,9 +48,18 @@ Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
 - "update my P/L" / "log trade" / "I made/lost $X on..." → UPDATE_SHEET
 - "what did I make today" / "P/L summary" → GET_SHEET_PL
 - "make/create a sheet called X" → CREATE_SHEET
+- "format my sheet" / "color code it" / "make it look nice" → SHEET_FORMAT with style="pl"
+- "color the P/L column green/red" → SHEET_CONDITIONAL_FORMAT
+- "update cell B3 to TSLA" → SHEET_UPDATE_CELL
+- "find all AAPL rows" → SHEET_FIND
+- "replace AAPL with NVDA" → SHEET_FIND_REPLACE
+- "clear rows 2 to 20" → SHEET_CLEAR
+- "add a June tab" → SHEET_ADD_TAB
+- "rename Sheet1 to May 2026" → SHEET_RENAME_TAB
 - "delete/remove the AAPL row" / "clear today's entries" → DELETE_SHEET_ROW (confirm first)
 - "delete the X sheet" → DELETE_SHEET (confirm first)
 - User can name the target sheet ("log it to my Options sheet"); pass it as sheet_name.
+- After CREATE_SHEET, automatically apply SHEET_FORMAT style="pl" unless the user said otherwise.
 
 **7. GENERAL → CHAT mode**
 
@@ -203,6 +212,83 @@ Target the sheet by `sheet_name` (resolved from Drive), or omit to use the linke
 **DELETE_SHEET** — move an entire spreadsheet to Drive trash (after confirmation)
 ```json
 {"action": "DELETE_SHEET", "sheet_name": "Old Scratch Sheet"}
+```
+
+**SHEET_FORMAT** — format a sheet. style="pl" applies full P/L formatting (dark header, currency, green/red P/L, freeze, auto-resize). Or pass range + styling fields for custom formatting.
+```json
+{"action": "SHEET_FORMAT", "sheet_name": "Options P/L", "style": "pl"}
+{"action": "SHEET_FORMAT", "sheet_name": "Options P/L", "range": "A1:H1", "bg": "#1a3a5c", "bold": true, "fg": "#ffffff"}
+```
+
+**SHEET_CONDITIONAL_FORMAT** — add green/red conditional coloring to a range (defaults to P/L column G)
+```json
+{"action": "SHEET_CONDITIONAL_FORMAT", "sheet_name": "Options P/L", "range": "G2:G1000"}
+```
+
+**SHEET_UPDATE_CELL** — update a single cell
+```json
+{"action": "SHEET_UPDATE_CELL", "sheet_name": "Options P/L", "cell": "B3", "value": "TSLA", "tab": "May"}
+```
+
+**SHEET_UPDATE_RANGE** — write a 2D array to any range
+```json
+{"action": "SHEET_UPDATE_RANGE", "sheet_name": "Options P/L", "range": "Sheet1!A2:C2", "values": [["2026-05-31", "SPY", "put"]]}
+```
+
+**SHEET_READ** — read a cell or range
+```json
+{"action": "SHEET_READ", "sheet_name": "Options P/L", "cell": "G10"}
+{"action": "SHEET_READ", "sheet_name": "Options P/L", "range": "A1:H5"}
+```
+
+**SHEET_FIND** — find rows matching a value (default: Symbol column)
+```json
+{"action": "SHEET_FIND", "sheet_name": "Options P/L", "symbol": "AAPL"}
+```
+
+**SHEET_FIND_REPLACE** — find and replace text across the sheet
+```json
+{"action": "SHEET_FIND_REPLACE", "sheet_name": "Options P/L", "find": "AAPL", "replace": "NVDA"}
+```
+
+**SHEET_INSERT_ROW** — insert a new row at a position
+```json
+{"action": "SHEET_INSERT_ROW", "sheet_name": "Options P/L", "row": 2, "values": ["2026-05-31", "SPY", "call", 1.50, 3.00, 5, 750.00, ""]}
+```
+
+**SHEET_CLEAR** — clear values from a range (keeps formatting)
+```json
+{"action": "SHEET_CLEAR", "sheet_name": "Options P/L", "range": "Sheet1!A2:H50"}
+```
+
+**SHEET_ADD_TAB** — add a new tab with optional P/L headers
+```json
+{"action": "SHEET_ADD_TAB", "sheet_name": "Options P/L", "tab": "June", "with_headers": true}
+```
+
+**SHEET_DELETE_TAB** — delete a tab/worksheet
+```json
+{"action": "SHEET_DELETE_TAB", "sheet_name": "Options P/L", "tab": "OldData"}
+```
+
+**SHEET_RENAME_TAB** — rename a tab
+```json
+{"action": "SHEET_RENAME_TAB", "sheet_name": "Options P/L", "old_name": "Sheet1", "new_name": "May 2026"}
+```
+
+**SHEET_FREEZE** — freeze rows/columns
+```json
+{"action": "SHEET_FREEZE", "sheet_name": "Options P/L", "rows": 1, "cols": 0}
+```
+
+**SHEET_AUTO_RESIZE** — auto-resize columns to fit content
+```json
+{"action": "SHEET_AUTO_RESIZE", "sheet_name": "Options P/L"}
+```
+
+**SHEET_DELETE_COLUMNS** — delete columns by 0-based index
+```json
+{"action": "SHEET_DELETE_COLUMNS", "sheet_name": "Options P/L", "start_col": 7, "end_col": 8}
 ```
 
 **ASSIGN_TICKET** — delegate a task to a bot (OSIRIS or LUMISNOVA). Creates a tracked ticket in the queue.
