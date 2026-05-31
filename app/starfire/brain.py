@@ -1,6 +1,7 @@
 import json
 import re
 import structlog
+from datetime import datetime, timezone
 from typing import Optional
 from anthropic import AsyncAnthropic
 from app.config import settings
@@ -15,6 +16,19 @@ class StarfireBrain:
     def __init__(self):
         self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = "claude-opus-4-8"
+
+    def _build_system(self, context: Optional[str] = None) -> str:
+        now = datetime.now(timezone.utc)
+        date_block = (
+            f"## Current Date & Time (UTC — always exact, never guess)\n"
+            f"Date: {now.strftime('%A, %B %d, %Y')}\n"
+            f"Time: {now.strftime('%H:%M')} UTC\n"
+            f"ISO:  {now.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
+        parts = [date_block, STARFIRE_SYSTEM_PROMPT]
+        if context:
+            parts.append(context)
+        return "\n\n".join(parts)
 
     async def think(
         self,
@@ -32,9 +46,7 @@ class StarfireBrain:
                 "raw": str
             }
         """
-        system = STARFIRE_SYSTEM_PROMPT
-        if context:
-            system = system + "\n\n" + context
+        system = self._build_system(context)
 
         messages = self._trim_history(conversation_history) + [
             {"role": "user", "content": user_message}
