@@ -10,6 +10,7 @@ from app.config import settings
 from app.database import init_db
 from app.routers import webhook, portfolio, trades, goals, admin
 from app.routers import google_auth
+from app.routers import tickets as tickets_router
 from app.workers.market_worker import MarketWorker
 from app.workers.event_worker import EventWorker
 from app.workers.report_worker import ReportWorker
@@ -107,6 +108,7 @@ app.include_router(trades.router)
 app.include_router(goals.router)
 app.include_router(admin.router)
 app.include_router(google_auth.router)
+app.include_router(tickets_router.router)
 
 
 @app.get("/")

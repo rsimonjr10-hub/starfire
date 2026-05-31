@@ -172,31 +172,36 @@ class DecisionEngine:
         self.db.add(ticket)
         await self.db.flush()
 
-        # Dispatch to the right bot via Telegram
-        sent = False
-        payload = {
-            "ticket_id": ticket.id,
-            "title": title,
-            "description": action.get("description", ""),
-            "priority": ticket.priority,
-            "context": ticket.context or {},
-        }
-        if assigned_to == "OSIRIS":
-            sent = await osiris_telegram.send_command("TICKET", payload, user.telegram_id)
-        elif assigned_to == "LUMISNOVA":
-            sent = await osiris_telegram.send_command(
-                "LUMISNOVA_TICKET",
-                {"message": f"Ticket #{ticket.id}: {title}", **payload},
-                user.telegram_id,
+        # Deliver ticket as a DM to the user appearing from the assigned bot.
+        # This puts the ticket directly in the user's bot chat so the bot's
+        # Claude session sees it in conversation context when the user opens it.
+        # (Bots cannot receive messages from other bots via Telegram, so
+        #  Argus Tower posting has no effect on the receiving bot — this is the
+        #  correct delivery path.)
+        delivered = False
+        if user.telegram_id:
+            ticket_dm = (
+                f"📋 *STARFIRE → {assigned_to}*\n"
+                f"Ticket #{ticket.id} assigned\n\n"
+                f"*{title}*"
+                + (f"\n{action.get('description', '')}" if action.get("description") else "")
+                + f"\n\nPriority: {ticket.priority}/10\n"
+                f"Fetch via: `GET /internal/tickets/{assigned_to.lower()}`"
             )
+            if assigned_to == "OSIRIS":
+                delivered = await osiris_telegram.send_as_osiris(user.telegram_id, ticket_dm)
+            elif assigned_to == "LUMISNOVA":
+                delivered = await lumisnova_telegram.send_data_to_user(user.telegram_id, ticket_dm)
 
-        if sent:
+        if delivered:
             ticket.status = "SENT"
-        label = "✓ sent" if sent else "queued (bridge unavailable)"
+
+        label = "delivered to your bot chat ✓" if delivered else "queued — bot will pick it up via API"
         return (
-            f"Ticket #{ticket.id} assigned to *{assigned_to}* — {label}\n"
+            f"Ticket #{ticket.id} → *{assigned_to}*\n"
             f"*{title}*"
             + (f"\n_{action.get('description')}_" if action.get("description") else "")
+            + f"\nStatus: {label}"
         )
 
     async def _close_ticket(self, user: User, action: dict) -> str:
