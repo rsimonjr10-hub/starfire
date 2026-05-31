@@ -94,15 +94,14 @@ class GmailService:
         self._token_json = token_json
         self._svc = get_gmail_service(token_json)
 
+    # ── LISTING / SEARCHING ────────────────────────────────────────────────
+
     def list_unread(self, max_results: int = 10) -> list[dict]:
         try:
             res = self._svc.users().messages().list(
-                userId="me",
-                q="is:unread in:inbox",
-                maxResults=max_results,
+                userId="me", q="is:unread in:inbox", maxResults=max_results,
             ).execute()
-            messages = res.get("messages", [])
-            return [self._fetch_summary(m["id"]) for m in messages]
+            return [self._fetch_summary(m["id"]) for m in res.get("messages", [])]
         except Exception as e:
             logger.error("gmail_list_unread_error", error=str(e))
             return []
@@ -110,12 +109,9 @@ class GmailService:
     def search(self, query: str, max_results: int = 10) -> list[dict]:
         try:
             res = self._svc.users().messages().list(
-                userId="me",
-                q=query,
-                maxResults=max_results,
+                userId="me", q=query, maxResults=max_results,
             ).execute()
-            messages = res.get("messages", [])
-            return [self._fetch_summary(m["id"]) for m in messages]
+            return [self._fetch_summary(m["id"]) for m in res.get("messages", [])]
         except Exception as e:
             logger.error("gmail_search_error", query=query, error=str(e))
             return []
@@ -144,6 +140,7 @@ class GmailService:
                 "thread_id": msg.get("threadId"),
                 "from": _header(headers, "From"),
                 "to": _header(headers, "To"),
+                "cc": _header(headers, "Cc"),
                 "subject": _header(headers, "Subject"),
                 "date": _header(headers, "Date"),
                 "body": _decode_body(msg["payload"])[:3000],
@@ -152,33 +149,188 @@ class GmailService:
             logger.error("gmail_read_message_error", message_id=message_id, error=str(e))
             return None
 
-    def send_email(self, to: str, subject: str, body: str, reply_to_thread: Optional[str] = None) -> bool:
+    def get_my_email(self) -> str:
+        """Return the authenticated user's email address."""
         try:
-            msg = MIMEMultipart("alternative")
-            msg["To"] = to
-            msg["Subject"] = subject
-            msg.attach(MIMEText(body, "plain"))
-            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-            send_body = {"raw": raw}
-            if reply_to_thread:
-                send_body["threadId"] = reply_to_thread
+            profile = self._svc.users().getProfile(userId="me").execute()
+            return profile.get("emailAddress", "")
+        except Exception:
+            return ""
+
+    # ── COMPOSING ──────────────────────────────────────────────────────────
+
+    def _build_mime(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        reply_to_thread: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
+        in_reply_to_subject: Optional[str] = None,
+    ) -> tuple[MIMEMultipart, dict]:
+        """Build a MIME message and return (mime_obj, send_body)."""
+        msg = MIMEMultipart("alternative")
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        if bcc:
+            msg["Bcc"] = bcc
+        if reply_to_message_id:
+            msg["In-Reply-To"] = reply_to_message_id
+            msg["References"] = reply_to_message_id
+        msg.attach(MIMEText(body, "plain"))
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        send_body: dict = {"raw": raw}
+        if reply_to_thread:
+            send_body["threadId"] = reply_to_thread
+        return msg, send_body
+
+    def send_email(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        reply_to_thread: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
+    ) -> bool:
+        try:
+            _, send_body = self._build_mime(to, subject, body, cc, bcc, reply_to_thread, reply_to_message_id)
             self._svc.users().messages().send(userId="me", body=send_body).execute()
             return True
         except Exception as e:
             logger.error("gmail_send_error", to=to, error=str(e))
             return False
 
+    def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        reply_to_thread: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Save a composed email as a Gmail draft. Returns {id, subject, to}."""
+        try:
+            _, send_body = self._build_mime(to, subject, body, cc, bcc, reply_to_thread)
+            draft = self._svc.users().drafts().create(
+                userId="me", body={"message": send_body},
+            ).execute()
+            return {
+                "id": draft["id"],
+                "to": to,
+                "subject": subject,
+                "preview": body[:200],
+            }
+        except Exception as e:
+            logger.error("gmail_create_draft_error", to=to, error=str(e))
+            return None
+
+    def send_draft(self, draft_id: str) -> bool:
+        """Send a saved draft by its draft ID."""
+        try:
+            self._svc.users().drafts().send(userId="me", body={"id": draft_id}).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_send_draft_error", draft_id=draft_id, error=str(e))
+            return False
+
+    def list_drafts(self, limit: int = 10) -> list[dict]:
+        """List saved drafts."""
+        try:
+            res = self._svc.users().drafts().list(userId="me", maxResults=limit).execute()
+            drafts = []
+            for d in res.get("drafts", []):
+                detail = self._svc.users().drafts().get(userId="me", id=d["id"]).execute()
+                headers = detail.get("message", {}).get("payload", {}).get("headers", [])
+                drafts.append({
+                    "id": d["id"],
+                    "to": _header(headers, "To"),
+                    "subject": _header(headers, "Subject"),
+                    "snippet": detail.get("message", {}).get("snippet", ""),
+                })
+            return drafts
+        except Exception as e:
+            logger.error("gmail_list_drafts_error", error=str(e))
+            return []
+
+    def delete_draft(self, draft_id: str) -> bool:
+        try:
+            self._svc.users().drafts().delete(userId="me", id=draft_id).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_delete_draft_error", error=str(e))
+            return False
+
+    def reply_to(self, message_id: str, body: str) -> bool:
+        """Reply to an existing email, keeping the thread and quoting context."""
+        try:
+            original = self.read_message(message_id)
+            if not original:
+                return False
+            subject = original["subject"]
+            if not subject.startswith("Re: "):
+                subject = f"Re: {subject}"
+            quoted = "\n".join(f"> {line}" for line in original["body"].splitlines()[:10])
+            full_body = f"{body}\n\n{quoted}"
+            return self.send_email(
+                to=original["from"],
+                subject=subject,
+                body=full_body,
+                reply_to_thread=original["thread_id"],
+                reply_to_message_id=message_id,
+            )
+        except Exception as e:
+            logger.error("gmail_reply_error", message_id=message_id, error=str(e))
+            return False
+
+    # ── MANAGEMENT ─────────────────────────────────────────────────────────
+
+    def archive_email(self, message_id: str) -> bool:
+        try:
+            self._svc.users().messages().modify(
+                userId="me", id=message_id, body={"removeLabelIds": ["INBOX"]},
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_archive_error", error=str(e))
+            return False
+
+    def delete_email(self, message_id: str) -> bool:
+        try:
+            self._svc.users().messages().trash(userId="me", id=message_id).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_delete_error", error=str(e))
+            return False
+
+    def mark_read(self, message_id: str) -> bool:
+        try:
+            self._svc.users().messages().modify(
+                userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]},
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_mark_read_error", error=str(e))
+            return False
+
     def _fetch_summary(self, message_id: str) -> dict:
         try:
             msg = self._svc.users().messages().get(
                 userId="me", id=message_id, format="metadata",
-                metadataHeaders=["From", "Subject", "Date"],
+                metadataHeaders=["From", "Subject", "Date", "To"],
             ).execute()
             headers = msg["payload"].get("headers", [])
             return {
                 "id": msg["id"],
                 "thread_id": msg.get("threadId"),
                 "from": _header(headers, "From"),
+                "to": _header(headers, "To"),
                 "subject": _header(headers, "Subject"),
                 "date": _header(headers, "Date"),
                 "snippet": msg.get("snippet", ""),
@@ -254,36 +406,135 @@ class CalendarService:
     def _svc(self):
         return get_calendar_service(self._token_json)
 
+    @staticmethod
+    def _time_block(dt_str: str, tz: str, all_day: bool = False) -> dict:
+        if all_day:
+            # accept "2026-06-01" or full ISO, just take the date part
+            date_part = dt_str[:10]
+            return {"date": date_part}
+        return {"dateTime": dt_str, "timeZone": tz}
+
     def create_event(
         self,
         title: str,
         start: str,
         end: Optional[str] = None,
         description: Optional[str] = None,
+        location: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        reminders_minutes: Optional[list[int]] = None,
+        all_day: bool = False,
+        recurrence: Optional[str] = None,
         tz: str = "America/New_York",
     ) -> Optional[dict]:
         try:
             if not end:
-                start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                end = (start_dt + timedelta(hours=1)).isoformat()
-            event = {
+                if all_day:
+                    end = start  # for all-day, end date = start date
+                else:
+                    start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                    end = (start_dt + timedelta(hours=1)).isoformat()
+
+            event: dict = {
                 "summary": title,
-                "start": {"dateTime": start, "timeZone": tz},
-                "end": {"dateTime": end, "timeZone": tz},
+                "start": self._time_block(start, tz, all_day),
+                "end": self._time_block(end, tz, all_day),
             }
             if description:
                 event["description"] = description
-            return self._svc().events().insert(calendarId="primary", body=event).execute()
+            if location:
+                event["location"] = location
+            if attendees:
+                event["attendees"] = [{"email": a.strip()} for a in attendees]
+                event["guestsCanSeeOtherGuests"] = True
+            if recurrence:
+                # e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO"
+                event["recurrence"] = [recurrence]
+            if reminders_minutes:
+                event["reminders"] = {
+                    "useDefault": False,
+                    "overrides": [{"method": "popup", "minutes": m} for m in reminders_minutes],
+                }
+            else:
+                event["reminders"] = {"useDefault": True}
+
+            created = self._svc().events().insert(
+                calendarId="primary",
+                body=event,
+                sendUpdates="all" if attendees else "none",
+            ).execute()
+            return created
         except Exception as e:
             logger.error("calendar_create_error", error=str(e))
             return None
 
-    def list_upcoming(self, limit: int = 10) -> list[dict]:
+    def update_event(
+        self,
+        event_id: str,
+        title: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        tz: str = "America/New_York",
+    ) -> Optional[dict]:
+        try:
+            event = self._svc().events().get(calendarId="primary", eventId=event_id).execute()
+            if title:
+                event["summary"] = title
+            if start:
+                event["start"] = {"dateTime": start, "timeZone": tz}
+            if end:
+                event["end"] = {"dateTime": end, "timeZone": tz}
+            if description is not None:
+                event["description"] = description
+            if location is not None:
+                event["location"] = location
+            if attendees is not None:
+                event["attendees"] = [{"email": a.strip()} for a in attendees]
+            return self._svc().events().update(
+                calendarId="primary", eventId=event_id, body=event,
+                sendUpdates="all",
+            ).execute()
+        except Exception as e:
+            logger.error("calendar_update_error", event_id=event_id, error=str(e))
+            return None
+
+    def delete_event(self, event_id: str) -> bool:
+        try:
+            self._svc().events().delete(
+                calendarId="primary", eventId=event_id, sendUpdates="all",
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error("calendar_delete_error", event_id=event_id, error=str(e))
+            return False
+
+    def search_events(self, query: str, limit: int = 10) -> list[dict]:
         try:
             now = datetime.now(timezone.utc).isoformat()
             result = self._svc().events().list(
                 calendarId="primary",
+                q=query,
                 timeMin=now,
+                maxResults=limit,
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+            return result.get("items", [])
+        except Exception as e:
+            logger.error("calendar_search_error", error=str(e))
+            return []
+
+    def list_upcoming(self, limit: int = 10, days_ahead: int = 7) -> list[dict]:
+        try:
+            now = datetime.now(timezone.utc)
+            until = (now + timedelta(days=days_ahead)).isoformat()
+            result = self._svc().events().list(
+                calendarId="primary",
+                timeMin=now.isoformat(),
+                timeMax=until,
                 maxResults=limit,
                 singleEvents=True,
                 orderBy="startTime",

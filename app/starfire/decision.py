@@ -31,10 +31,16 @@ LUMISCAPITAL_ACTIONS = {
 }
 
 GOOGLE_ACTIONS = {
+    # Gmail
     "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
+    "DRAFT_EMAIL", "SEND_DRAFT", "LIST_DRAFTS", "DELETE_DRAFT",
+    "REPLY_EMAIL", "ARCHIVE_EMAIL", "DELETE_EMAIL", "MARK_READ",
+    # Drive / Docs
     "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC",
-    "GET_CALENDAR", "CREATE_EVENT",
-    # Sheets — full capability set
+    # Calendar
+    "GET_CALENDAR", "CREATE_EVENT", "UPDATE_EVENT",
+    "DELETE_EVENT", "SEARCH_CALENDAR", "CREATE_APPOINTMENT",
+    # Sheets
     "UPDATE_SHEET", "GET_SHEET_PL",
     "CREATE_SHEET", "DELETE_SHEET_ROW", "DELETE_SHEET",
     "SHEET_FORMAT", "SHEET_UPDATE_CELL", "SHEET_UPDATE_RANGE",
@@ -596,11 +602,89 @@ class DecisionEngine:
                 return text[:1500] + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
 
             if action_type == "SEND_EMAIL":
-                to, subject, body = action.get("to", ""), action.get("subject", ""), action.get("body", "")
+                to = action.get("to", "")
+                subject = action.get("subject", "")
+                body = action.get("body", "")
                 if not to or not subject or not body:
                     return "Missing to/subject/body."
-                success = gmail.send_email(to, subject, body, reply_to_thread=action.get("reply_to_thread"))
-                return f"Email sent to {to}\nSubject: {subject}" if success else "Failed to send email."
+                success = gmail.send_email(
+                    to=to, subject=subject, body=body,
+                    cc=action.get("cc"), bcc=action.get("bcc"),
+                    reply_to_thread=action.get("reply_to_thread"),
+                    reply_to_message_id=action.get("reply_to_message_id"),
+                )
+                if success:
+                    cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
+                    return f"Email sent to *{to}*{cc_str}\nSubject: _{subject}_"
+                return "Failed to send email."
+
+            if action_type == "DRAFT_EMAIL":
+                to = action.get("to", "")
+                subject = action.get("subject", "")
+                body = action.get("body", "")
+                if not to or not subject or not body:
+                    return "Missing to/subject/body for draft."
+                draft = gmail.create_draft(
+                    to=to, subject=subject, body=body,
+                    cc=action.get("cc"), bcc=action.get("bcc"),
+                    reply_to_thread=action.get("reply_to_thread"),
+                )
+                if draft:
+                    preview = body[:300].replace("\n", " ")
+                    return (
+                        f"Draft saved ✓\n"
+                        f"*To:* {to}\n"
+                        f"*Subject:* {subject}\n"
+                        + (f"*CC:* {action['cc']}\n" if action.get("cc") else "")
+                        + f"\n_{preview}..._\n\n"
+                        f"Draft ID: `{draft['id']}`\n"
+                        f"Say _\"send draft {draft['id']}\"_ when ready."
+                    )
+                return "Failed to save draft."
+
+            if action_type == "SEND_DRAFT":
+                draft_id = action.get("draft_id", "")
+                if not draft_id:
+                    return "Which draft? Give me the draft ID."
+                ok = gmail.send_draft(draft_id)
+                return "Draft sent ✓" if ok else "Failed to send draft. Check the ID."
+
+            if action_type == "LIST_DRAFTS":
+                drafts = gmail.list_drafts(limit=action.get("limit", 10))
+                if not drafts:
+                    return "No saved drafts."
+                lines = ["*Saved Drafts*\n"]
+                for d in drafts:
+                    lines.append(f"`{d['id']}` → *{d['to']}* | _{d['subject']}_\n  {d['snippet'][:80]}")
+                return "\n".join(lines)
+
+            if action_type == "DELETE_DRAFT":
+                draft_id = action.get("draft_id", "")
+                ok = gmail.delete_draft(draft_id) if draft_id else False
+                return "Draft deleted." if ok else "Couldn't delete that draft."
+
+            if action_type == "REPLY_EMAIL":
+                message_id = action.get("message_id", "")
+                body = action.get("body", "")
+                if not message_id or not body:
+                    return "Need message_id and reply body."
+                ok = gmail.reply_to(message_id, body)
+                return "Reply sent ✓" if ok else "Failed to send reply."
+
+            if action_type == "ARCHIVE_EMAIL":
+                message_id = action.get("message_id", "")
+                ok = gmail.archive_email(message_id) if message_id else False
+                return "Archived ✓" if ok else "Couldn't archive — check the message ID."
+
+            if action_type == "DELETE_EMAIL":
+                message_id = action.get("message_id", "")
+                ok = gmail.delete_email(message_id) if message_id else False
+                return "Moved to trash ✓" if ok else "Couldn't delete — check the message ID."
+
+            if action_type == "MARK_READ":
+                message_id = action.get("message_id", "")
+                ok = gmail.mark_read(message_id) if message_id else False
+                return "Marked as read ✓" if ok else "Couldn't mark — check the message ID."
 
             if action_type == "SEARCH_DRIVE":
                 files = drive.search(action.get("query", ""))
@@ -645,7 +729,7 @@ class DecisionEngine:
                 logger.error("calendar_get_error", error=str(e))
                 return f"Calendar error: {e}"
 
-        if action_type == "CREATE_EVENT":
+        if action_type in ("CREATE_EVENT", "CREATE_APPOINTMENT"):
             if not self._google_connected(user):
                 return "Google not connected. Use /connect_google."
             title = action.get("title", "")
@@ -653,26 +737,98 @@ class DecisionEngine:
             if not title or not start:
                 return "Need event title and start time."
             try:
+                attendees = action.get("attendees") or []
+                if isinstance(attendees, str):
+                    attendees = [a.strip() for a in attendees.split(",") if a.strip()]
+                reminders = action.get("reminders_minutes") or action.get("reminders")
+                if isinstance(reminders, int):
+                    reminders = [reminders]
+
                 event = self._calendar(user).create_event(
                     title=title,
                     start=start,
                     end=action.get("end"),
                     description=action.get("description"),
+                    location=action.get("location"),
+                    attendees=attendees or None,
+                    reminders_minutes=reminders,
+                    all_day=action.get("all_day", False),
+                    recurrence=action.get("recurrence"),
                     tz=action.get("timezone", "America/New_York"),
                 )
                 if event:
                     link = event.get("htmlLink", "")
-                    end_str = action.get("end", "")[:16].replace("T", " ") if action.get("end") else ""
+                    start_str = start[:16].replace("T", " ")
+                    end_str = (action.get("end", "")[:16].replace("T", " ")) if action.get("end") else ""
+                    inv_str = f"\nInvites sent to: {', '.join(attendees)}" if attendees else ""
                     return (
-                        f"Calendar event created:\n"
+                        f"Event created ✓\n"
                         f"*{title}*\n"
-                        f"Start: `{start[:16].replace('T', ' ')}`"
+                        f"Start: `{start_str}`"
                         + (f" → `{end_str}`" if end_str else "")
-                        + (f"\n[View]({link})" if link else "")
+                        + (f"\nLocation: {action['location']}" if action.get("location") else "")
+                        + inv_str
+                        + (f"\n[View in Calendar]({link})" if link else "")
                     )
-                return "Failed to create calendar event."
+                return "Failed to create event."
             except Exception as e:
                 logger.error("calendar_create_error", error=str(e))
+                return f"Calendar error: {e}"
+
+        if action_type == "UPDATE_EVENT":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            event_id = action.get("event_id", "")
+            if not event_id:
+                return "Need the event ID to update. Search for it with 'find [event name]'."
+            try:
+                attendees = action.get("attendees")
+                if isinstance(attendees, str):
+                    attendees = [a.strip() for a in attendees.split(",") if a.strip()]
+                event = self._calendar(user).update_event(
+                    event_id=event_id,
+                    title=action.get("title"),
+                    start=action.get("start"),
+                    end=action.get("end"),
+                    description=action.get("description"),
+                    location=action.get("location"),
+                    attendees=attendees,
+                    tz=action.get("timezone", "America/New_York"),
+                )
+                return f"Event updated ✓\n*{event.get('summary', '')}*" if event else "Failed to update event."
+            except Exception as e:
+                return f"Calendar error: {e}"
+
+        if action_type == "DELETE_EVENT":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            event_id = action.get("event_id", "")
+            if not event_id:
+                return "Need the event ID to delete."
+            try:
+                ok = self._calendar(user).delete_event(event_id)
+                return "Event cancelled and attendees notified ✓" if ok else "Failed to delete event."
+            except Exception as e:
+                return f"Calendar error: {e}"
+
+        if action_type == "SEARCH_CALENDAR":
+            if not self._google_connected(user):
+                return "Google not connected. Use /connect_google."
+            query = action.get("query", "")
+            if not query:
+                return "What should I search for in your calendar?"
+            try:
+                events = self._calendar(user).search_events(query, int(action.get("limit", 10)))
+                if not events:
+                    return f"No calendar events found matching '{query}'."
+                lines = [f"*Calendar: {query}*\n"]
+                for e in events:
+                    start = e.get("start", {})
+                    dt = start.get("dateTime", start.get("date", ""))[:16].replace("T", " ")
+                    eid = e.get("id", "")
+                    lines.append(f"`{dt}` — *{e.get('summary', '(no title)')}*\nID: `{eid}`")
+                return "\n".join(lines)
+            except Exception as e:
                 return f"Calendar error: {e}"
 
         # Sheets — options P/L tracking
