@@ -195,12 +195,12 @@ class DecisionEngine:
         delivered = False
         if user.telegram_id:
             ticket_dm = (
-                f"📋 *STARFIRE → {assigned_to}*\n"
+                f"📋 <b>STARFIRE → {assigned_to}</b>\n"
                 f"Ticket #{ticket.id} assigned\n\n"
-                f"*{title}*"
+                f"<b>{title}</b>"
                 + (f"\n{action.get('description', '')}" if action.get("description") else "")
                 + f"\n\nPriority: {ticket.priority}/10\n"
-                f"Fetch via: `GET /internal/tickets/{assigned_to.lower()}`"
+                f"Fetch via: <code>GET /internal/tickets/{assigned_to.lower()}</code>"
             )
             if assigned_to == "OSIRIS":
                 delivered = await osiris_telegram.send_as_osiris(user.telegram_id, ticket_dm)

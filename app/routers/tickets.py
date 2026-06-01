@@ -108,9 +108,9 @@ async def update_ticket(ticket_id: int, body: TicketUpdate, _=Depends(_verify)):
                 if user and user.telegram_id:
                     icon = "✅" if body.status == "DONE" else "❌"
                     msg = (
-                        f"{icon} *Ticket #{ticket_id} {body.status}*\n"
-                        f"*{ticket.title}*"
-                        + (f"\n_{body.result}_" if body.result else "")
+                        f"{icon} <b>Ticket #{ticket_id} {body.status}</b>\n"
+                        f"<b>{ticket.title}</b>"
+                        + (f"\n<i>{body.result}</i>" if body.result else "")
                         + f"\n— {ticket.assigned_to}"
                     )
                     await send_notification(user.telegram_id, msg)
@@ -216,11 +216,11 @@ async def osiris_performance_report(body: OsirisPerformanceReport, _=Depends(_ve
                 pnl_str = f"{sign}${pnl:,.2f}" if pnl is not None else "N/A"
                 wr_str = f"{body.win_rate*100:.0f}%" if body.win_rate is not None else "N/A"
                 notif = (
-                    f"📊 *OSIRIS Performance Report*\n"
-                    f"P/L Today: `{pnl_str}`"
-                    + (f" | Total: `{'+' if (body.pnl_total or 0) >= 0 else ''}${body.pnl_total:,.2f}`" if body.pnl_total is not None else "")
+                    f"📊 <b>OSIRIS Performance Report</b>\n"
+                    f"P/L Today: <code>{pnl_str}</code>"
+                    + (f" | Total: <code>{'+' if (body.pnl_total or 0) >= 0 else ''}${body.pnl_total:,.2f}</code>" if body.pnl_total is not None else "")
                     + (f"\nTrades: {body.trades_today} | Win Rate: {wr_str}" if body.trades_today else "")
-                    + (f"\n\n_{body.summary}_" if body.summary else "")
+                    + (f"\n\n<i>{body.summary}</i>" if body.summary else "")
                 )
                 await send_notification(user.telegram_id, notif)
             except Exception:

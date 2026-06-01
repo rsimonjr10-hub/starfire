@@ -67,7 +67,7 @@ async def send_notification(telegram_id: int, message: str) -> None:
         await app.bot.send_message(
             chat_id=telegram_id,
             text=message,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
     except Exception as e:
         logger.error("telegram_notify_error", telegram_id=telegram_id, error=str(e))

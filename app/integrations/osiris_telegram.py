@@ -65,15 +65,12 @@ class OsirisTelegramBridge:
             return False
 
         body = json.dumps(payload, indent=2)
-        text = (
-            f"STARFIRE → OSIRIS\n"
-            f"Command: {command}\n"
-            f"```\n{body}\n```"
-        )
+        text = f"STARFIRE → OSIRIS\nCommand: {command}\n\n{body}"
         if user_telegram_id:
-            text += f"\nRoute reply to user: {user_telegram_id}"
+            text += f"\n\nRoute reply to user: {user_telegram_id}"
 
-        return await self._send(self._post_token, self._chat_id, text)
+        # Plain text — JSON keys contain underscores that break Markdown parsing
+        return await self._send(self._post_token, self._chat_id, text, parse_mode=None)
 
     async def send_trade_order(
         self,
@@ -116,17 +113,16 @@ class OsirisTelegramBridge:
         """
         if not self._osiris_token:
             return False
-        return await self._send(self._osiris_token, str(user_telegram_id), text)
+        return await self._send(self._osiris_token, str(user_telegram_id), text, parse_mode="HTML")
 
-    async def _send(self, token: str, chat_id: str, text: str) -> bool:
+    async def _send(self, token: str, chat_id: str, text: str, parse_mode: Optional[str] = None) -> bool:
         url = f"{_TG_API}/bot{token}/sendMessage"
+        payload: dict = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                })
+                resp = await client.post(url, json=payload)
                 data = resp.json()
                 if not data.get("ok"):
                     err = data.get("description", "unknown error")
