@@ -129,13 +129,51 @@ class OsirisTelegramBridge:
                 })
                 data = resp.json()
                 if not data.get("ok"):
-                    logger.warning("osiris_tg_send_failed", chat_id=chat_id, response=data)
+                    err = data.get("description", "unknown error")
+                    logger.warning("osiris_tg_send_failed", chat_id=chat_id, error=err, error_code=data.get("error_code"))
                     return False
                 logger.info("osiris_tg_command_sent", chat_id=chat_id)
                 return True
         except Exception as e:
             logger.error("osiris_tg_send_error", error=str(e))
             return False
+
+    async def diagnose(self) -> dict:
+        """Return a diagnostic dict explaining why Telegram sends may be failing."""
+        result = {
+            "chat_id_set": bool(self._chat_id),
+            "osiris_token_set": bool(self._osiris_token),
+            "starfire_token_set": bool(self._starfire_token),
+            "chat_id": self._chat_id,
+        }
+        if not self.is_available():
+            result["status"] = "not_configured"
+            result["fix"] = "Set OSIRIS_TELEGRAM_CHAT_ID in Railway env vars"
+            return result
+
+        # Test-send a blank check to Telegram to surface the real error
+        url = f"{_TG_API}/bot{self._post_token}/getChat"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.post(url, json={"chat_id": self._chat_id})
+                data = resp.json()
+                if data.get("ok"):
+                    chat = data.get("result", {})
+                    result["status"] = "ok"
+                    result["chat_title"] = chat.get("title", "")
+                    result["chat_type"] = chat.get("type", "")
+                else:
+                    result["status"] = "error"
+                    result["error"] = data.get("description", "unknown")
+                    result["error_code"] = data.get("error_code")
+                    if data.get("error_code") == 400:
+                        result["fix"] = "OSIRIS_TELEGRAM_CHAT_ID is wrong — check the group ID (supergroups need -100 prefix)"
+                    elif data.get("error_code") == 403:
+                        result["fix"] = "Bot was kicked from the group or never added — add the bot to Argus Tower"
+        except Exception as e:
+            result["status"] = "network_error"
+            result["error"] = str(e)
+        return result
 
 
 osiris_telegram = OsirisTelegramBridge()

@@ -99,6 +99,8 @@ class DecisionEngine:
         # ── OSIRIS ROUTING ──────────────────────────────────────────────
         if action_type == "ROUTE_TRADE":
             return await self._route_trade(user, action)
+        if action_type == "CHECK_OSIRIS_PERFORMANCE":
+            return await self._check_osiris_performance(user, action)
 
         # ── LUMISNOVA ROUTING ───────────────────────────────────────────
         if action_type == "QUERY_LUMISNOVA":
@@ -365,6 +367,72 @@ class DecisionEngine:
             )
 
         return f"Could not reach OSIRIS. Error: {execution.get('error', 'Unknown')}"
+
+    async def _check_osiris_performance(self, user: User, action: dict) -> str:
+        """Read the latest OSIRIS performance report pushed via /internal/tickets/osiris/report."""
+        report = (user.preferences or {}).get("osiris_report")
+
+        # If HTTP bridge is up, try to pull live status too
+        live_status = None
+        if osiris_bridge.is_available():
+            try:
+                live_status = await osiris_bridge.get_status()
+            except Exception:
+                pass
+
+        if not report and not live_status:
+            return (
+                "No OSIRIS performance data yet.\n\n"
+                "OSIRIS needs to push reports to STARFIRE using:\n"
+                "`POST /internal/tickets/osiris/report`\n"
+                "with `X-Service-Secret` header.\n\n"
+                "Or set `OSIRIS_SERVICE_URL` in Railway so I can pull status directly."
+            )
+
+        lines = ["*OSIRIS Performance*\n"]
+
+        if report:
+            reported_at = report.get("reported_at", "")[:19].replace("T", " ")
+            pnl_today = report.get("pnl_today")
+            pnl_total = report.get("pnl_total")
+            trades = report.get("trades_today")
+            wins = report.get("wins_today")
+            losses = report.get("losses_today")
+            win_rate = report.get("win_rate")
+            summary = report.get("summary")
+            positions = report.get("open_positions") or {}
+            fills = report.get("fills") or []
+
+            if pnl_today is not None:
+                sign = "+" if pnl_today >= 0 else ""
+                icon = "🟢" if pnl_today >= 0 else "🔴"
+                lines.append(f"{icon} P/L Today: `{sign}${pnl_today:,.2f}`")
+            if pnl_total is not None:
+                sign = "+" if pnl_total >= 0 else ""
+                lines.append(f"P/L All-Time: `{sign}${pnl_total:,.2f}`")
+            if trades is not None:
+                wr_str = f" | Win Rate: `{win_rate*100:.0f}%`" if win_rate is not None else ""
+                wl_str = f" ({wins}W / {losses}L)" if wins is not None else ""
+                lines.append(f"Trades Today: `{trades}`{wl_str}{wr_str}")
+            if summary:
+                lines.append(f"\n_{summary}_")
+            if positions:
+                lines.append("\n*Open Positions*")
+                for sym, pos in list(positions.items())[:8]:
+                    qty = pos.get("qty", pos.get("quantity", "?"))
+                    avg = pos.get("avg", pos.get("avg_price", "?"))
+                    lines.append(f"  `{sym}`: {qty} @ ${avg}")
+            if fills:
+                lines.append("\n*Recent Fills*")
+                for f in fills[:5]:
+                    pl_str = f" P/L: ${f.get('pnl'):,.2f}" if f.get("pnl") is not None else ""
+                    lines.append(f"  `{f.get('symbol')}` {f.get('side')} × {f.get('quantity','?')}{pl_str}")
+            lines.append(f"\n_Last report: {reported_at} UTC_")
+
+        if live_status and live_status.get("status") != "unreachable":
+            lines.append(f"\n*Live Bridge*: {live_status}")
+
+        return "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────────────────
     # LUMISNOVA — financial data routing

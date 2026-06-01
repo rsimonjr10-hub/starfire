@@ -787,14 +787,31 @@ class TelegramHandlers:
         lines.append("*OSIRIS (Execution)*")
         if osiris_bridge.is_available():
             ok = await osiris_bridge.ping()
-            lines.append(f"  HTTP: {'online' if ok else 'UNREACHABLE'}")
+            lines.append(f"  HTTP: {'🟢 online' if ok else '🔴 UNREACHABLE'}")
         else:
-            lines.append("  HTTP: not configured")
-        if osiris_telegram.is_available():
-            sent = await osiris_telegram.request_status(user.telegram_id)
-            lines.append(f"  Telegram (Argus Tower): {'ping sent to osiris_prime_bot' if sent else 'SEND FAILED'}")
-        else:
+            lines.append("  HTTP: not configured\n  _Set OSIRIS\\_SERVICE\\_URL in Railway_")
+
+        diag = await osiris_telegram.diagnose()
+        if diag.get("status") == "not_configured":
             lines.append("  Telegram: not configured\n  _Set OSIRIS\\_TELEGRAM\\_CHAT\\_ID_")
+        elif diag.get("status") == "ok":
+            chat = diag.get("chat_title", diag.get("chat_id", ""))
+            lines.append(f"  Telegram: 🟢 connected ({chat})")
+        else:
+            err = diag.get("error", "unknown")
+            fix = diag.get("fix", "")
+            lines.append(f"  Telegram: 🔴 FAILED — {err}")
+            if fix:
+                lines.append(f"  _Fix: {fix}_")
+
+        # OSIRIS last performance report
+        report = (user.preferences or {}).get("osiris_report")
+        if report:
+            pnl = report.get("pnl_today")
+            sign = "+" if pnl and pnl >= 0 else ""
+            pnl_str = f"{sign}${pnl:,.2f}" if pnl is not None else "N/A"
+            reported_at = report.get("reported_at", "")[:10]
+            lines.append(f"  Last P/L: `{pnl_str}` ({reported_at})")
 
         # LUMISNOVA
         lines.append("\n*LUMISNOVA (Data)*")

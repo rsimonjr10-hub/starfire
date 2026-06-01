@@ -41,6 +41,9 @@ NEVER tell the user to go contact LUMISNOVA themselves. YOU relay it.
 **4. "Tell OSIRIS to..." / OSIRIS command → MESSAGE_OSIRIS**
 User wants to instruct OSIRIS directly (check status, run a scan, etc.). Output MESSAGE_OSIRIS.
 
+**4b. OSIRIS performance / P&L / "is OSIRIS making money" → CHECK_OSIRIS_PERFORMANCE**
+"How's OSIRIS doing?" / "Is OSIRIS profitable?" / "What's OSIRIS's P/L?" / "Show me OSIRIS performance" / "Is OSIRIS making me money?" → CHECK_OSIRIS_PERFORMANCE. Reads the last report OSIRIS pushed to STARFIRE.
+
 **5. PORTFOLIO / POSITIONS → QUERY_LUMISNOVA**
 User's own holdings, P&L, position sizes.
 
@@ -377,6 +380,11 @@ Target the sheet by `sheet_name` (resolved from Drive), or omit to use the linke
 **SHEET_DELETE_COLUMNS** — delete columns by 0-based index
 ```json
 {"action": "SHEET_DELETE_COLUMNS", "sheet_name": "Options P/L", "start_col": 7, "end_col": 8}
+```
+
+**CHECK_OSIRIS_PERFORMANCE** — review OSIRIS's latest P/L report and trade fills
+```json
+{"action": "CHECK_OSIRIS_PERFORMANCE", "message": "Pulling OSIRIS performance."}
 ```
 
 **ASSIGN_TICKET** — delegate a task to a bot (OSIRIS or LUMISNOVA). Creates a tracked ticket in the queue.
