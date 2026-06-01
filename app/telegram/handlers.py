@@ -997,10 +997,30 @@ class TelegramHandlers:
     # NATURAL LANGUAGE (main STARFIRE brain)
     # ------------------------------------------------------------------ #
 
+    _WAKE_WORDS = ("star ", "starfire", "@starfire5_bot")
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_text = update.message.text
         if not user_text:
             return
+
+        # In group/supergroup chats only respond when directly addressed
+        chat_type = update.effective_chat.type if update.effective_chat else "private"
+        if chat_type in ("group", "supergroup"):
+            lower = user_text.lower()
+            if not any(lower.startswith(w) or w in lower for w in self._WAKE_WORDS):
+                return
+            # Strip the wake word so the brain sees a clean message
+            for wake in self._WAKE_WORDS:
+                if lower.startswith(wake):
+                    user_text = user_text[len(wake):].strip()
+                    break
+                idx = lower.find(wake)
+                if idx != -1:
+                    user_text = (user_text[:idx] + user_text[idx + len(wake):]).strip()
+                    break
+            if not user_text:
+                return
 
         await update.message.chat.send_action("typing")
 
