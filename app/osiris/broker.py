@@ -133,6 +133,33 @@ class AlpacaBroker:
             slippage=slippage,
         )
 
+    async def get_account(self) -> dict:
+        """Account equity, buying power, and today's P&L."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v2/account", headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_positions(self) -> list[dict]:
+        """All open positions."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v2/positions", headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_recent_orders(self, limit: int = 20) -> list[dict]:
+        """Today's filled orders."""
+        from datetime import date
+        after = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self.base_url}/v2/orders",
+                headers=self.headers,
+                params={"status": "filled", "limit": limit, "after": after, "direction": "desc"},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
 
 def get_broker():
     if settings.use_mock_broker:

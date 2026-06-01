@@ -1,3 +1,4 @@
+import asyncio
 import json
 import structlog
 from typing import Optional
@@ -369,29 +370,62 @@ class DecisionEngine:
         return f"Could not reach OSIRIS. Error: {execution.get('error', 'Unknown')}"
 
     async def _check_osiris_performance(self, user: User, action: dict) -> str:
-        """Read the latest OSIRIS performance report pushed via /internal/tickets/osiris/report."""
-        report = (user.preferences or {}).get("osiris_report")
-
-        # If HTTP bridge is up, try to pull live status too
-        live_status = None
-        if osiris_bridge.is_available():
-            try:
-                live_status = await osiris_bridge.get_status()
-            except Exception:
-                pass
-
-        if not report and not live_status:
-            return (
-                "No OSIRIS performance data yet.\n\n"
-                "OSIRIS needs to push reports to STARFIRE using:\n"
-                "`POST /internal/tickets/osiris/report`\n"
-                "with `X-Service-Secret` header.\n\n"
-                "Or set `OSIRIS_SERVICE_URL` in Railway so I can pull status directly."
-            )
+        """Pull OSIRIS performance from Alpaca directly, then fall back to pushed report."""
+        from app.config import settings as cfg
 
         lines = ["*OSIRIS Performance*\n"]
+        has_data = False
 
-        if report:
+        # ── Live Alpaca pull (most reliable) ──────────────────────────────
+        if not cfg.use_mock_broker and cfg.broker_api_key and cfg.broker_api_key != "mock":
+            try:
+                from app.osiris.broker import AlpacaBroker
+                broker = AlpacaBroker()
+                account, positions, orders = await asyncio.gather(
+                    broker.get_account(),
+                    broker.get_positions(),
+                    broker.get_recent_orders(),
+                    return_exceptions=True,
+                )
+
+                if isinstance(account, dict):
+                    equity = float(account.get("equity", 0))
+                    pnl_today = float(account.get("equity", 0)) - float(account.get("last_equity", 0))
+                    bp = float(account.get("buying_power", 0))
+                    sign = "+" if pnl_today >= 0 else ""
+                    icon = "🟢" if pnl_today >= 0 else "🔴"
+                    lines.append(f"{icon} P/L Today: `{sign}${pnl_today:,.2f}`")
+                    lines.append(f"Equity: `${equity:,.2f}` | Buying Power: `${bp:,.2f}`")
+                    has_data = True
+
+                if isinstance(positions, list) and positions:
+                    lines.append("\n*Open Positions*")
+                    for p in positions[:8]:
+                        sym = p.get("symbol", "")
+                        qty = p.get("qty", "?")
+                        avg = float(p.get("avg_entry_price", 0))
+                        unreal = float(p.get("unrealized_pl", 0))
+                        unreal_sign = "+" if unreal >= 0 else ""
+                        lines.append(f"  `{sym}`: {qty} shares @ ${avg:.2f} ({unreal_sign}${unreal:,.2f})")
+                    has_data = True
+
+                if isinstance(orders, list) and orders:
+                    lines.append("\n*Today's Fills*")
+                    for o in orders[:10]:
+                        sym = o.get("symbol", "")
+                        side = o.get("side", "").upper()
+                        qty = o.get("filled_qty", o.get("qty", "?"))
+                        price = float(o.get("filled_avg_price") or 0)
+                        lines.append(f"  `{sym}` {side} × {qty} @ ${price:.2f}")
+                    has_data = True
+
+            except Exception as e:
+                logger.error("alpaca_performance_error", error=str(e))
+                lines.append(f"_Alpaca pull failed: {e}_")
+
+        # ── Pushed report (fallback / supplement) ─────────────────────────
+        report = (user.preferences or {}).get("osiris_report")
+        if report and not has_data:
             reported_at = report.get("reported_at", "")[:19].replace("T", " ")
             pnl_today = report.get("pnl_today")
             pnl_total = report.get("pnl_total")
@@ -428,9 +462,17 @@ class DecisionEngine:
                     pl_str = f" P/L: ${f.get('pnl'):,.2f}" if f.get("pnl") is not None else ""
                     lines.append(f"  `{f.get('symbol')}` {f.get('side')} × {f.get('quantity','?')}{pl_str}")
             lines.append(f"\n_Last report: {reported_at} UTC_")
+            has_data = True
 
-        if live_status and live_status.get("status") != "unreachable":
-            lines.append(f"\n*Live Bridge*: {live_status}")
+        if not has_data:
+            return (
+                "No OSIRIS performance data available.\n\n"
+                "To enable live tracking, set in Railway:\n"
+                "`USE_MOCK_BROKER=false`\n"
+                "`BROKER_API_KEY=<alpaca key>`\n"
+                "`BROKER_API_SECRET=<alpaca secret>`\n"
+                "`BROKER_BASE_URL=https://paper-api.alpaca.markets`"
+            )
 
         return "\n".join(lines)
 
