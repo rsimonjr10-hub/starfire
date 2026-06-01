@@ -49,6 +49,7 @@ async def get_tickets(bot_name: str, _=Depends(_verify)):
         "tickets": [
             {
                 "id": t.id,
+                "user_id": t.user_id,
                 "title": t.title,
                 "description": t.description,
                 "priority": t.priority,
