@@ -56,6 +56,11 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("search_email", h.cmd_search_email))
         _application.add_handler(CommandHandler("drive", h.cmd_drive))
 
+        # Voice notes and audio files → transcribe → STARFIRE brain
+        _application.add_handler(
+            MessageHandler(filters.VOICE | filters.AUDIO, h.handle_voice)
+        )
+
         # Catch-all natural language → STARFIRE brain
         _application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, h.handle_message)

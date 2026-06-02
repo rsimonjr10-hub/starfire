@@ -1066,6 +1066,60 @@ class TelegramHandlers:
 
         await self._safe_reply(update, reply)
 
+    # ------------------------------------------------------------------ #
+    # VOICE / AUDIO MESSAGES
+    # ------------------------------------------------------------------ #
+
+    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Download a voice note or audio file, transcribe it, run through brain."""
+        message = update.message
+        voice = message.voice or message.audio
+        if not voice:
+            return
+
+        await message.chat.send_action("typing")
+
+        # Download audio bytes from Telegram
+        tg_file = await context.bot.get_file(voice.file_id)
+        audio_bytes = bytes(await tg_file.download_as_bytearray())
+
+        # Determine filename for MIME detection
+        if message.voice:
+            filename = "voice.ogg"
+        else:
+            filename = (getattr(voice, "file_name", None) or "audio.mp3")
+
+        from app.integrations.whisper import transcribe
+        transcript = await transcribe(audio_bytes, filename)
+
+        if not transcript:
+            await message.reply_html(
+                "🎙 <i>Couldn't transcribe that. Make sure GROQ_API_KEY or OPENAI_API_KEY is set.</i>"
+            )
+            return
+
+        # Echo what was heard so the user can verify
+        await message.reply_html(f"🎙 <i>{transcript}</i>")
+
+        # Honour group-chat wake-word filter for voice too
+        chat_type = update.effective_chat.type if update.effective_chat else "private"
+        if chat_type in ("group", "supergroup"):
+            lower = transcript.lower()
+            if not any(lower.startswith(w) or w in lower for w in self._WAKE_WORDS):
+                return
+            for wake in self._WAKE_WORDS:
+                if lower.startswith(wake):
+                    transcript = transcript[len(wake):].strip()
+                    break
+                idx = lower.find(wake)
+                if idx != -1:
+                    transcript = (transcript[:idx] + transcript[idx + len(wake):]).strip()
+                    break
+            if not transcript:
+                return
+
+        await self._run_brain(update, transcript)
+
     async def _safe_reply(self, update: Update, text: str) -> None:
         if not text:
             return
