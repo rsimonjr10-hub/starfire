@@ -1,7 +1,7 @@
 """
 STARFIRE Dashboard API
-Serves the web frontend and provides JSON endpoints for memory management
-and live system data.
+Serves the web frontend and provides JSON endpoints for memory management,
+live system data, and SnapTrade brokerage connections (Chase, etc.).
 
 Auth: HMAC token derived from user telegram_id + APP_SECRET_KEY.
 Users get their personal URL from STARFIRE via /mylink.
@@ -9,13 +9,10 @@ Users get their personal URL from STARFIRE via /mylink.
 
 import hashlib
 import hmac
-import json
-from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -26,6 +23,7 @@ from app.models.memory import UserMemory
 from app.models.task import Task
 from app.models.goal import Goal
 from app.models.ticket import BotTicket
+from app.integrations.snaptrade import snaptrade
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -38,9 +36,6 @@ def _make_token(telegram_id: int) -> str:
         str(telegram_id).encode(),
         hashlib.sha256,
     ).hexdigest()[:32]
-
-
-# Python's hmac module uses hmac.new() not hmac.HMAC() directly
 
 
 async def _get_user(token: str = Query(...)) -> User:
@@ -79,7 +74,7 @@ async def dashboard_page(token: str = Query(...)):
 
 class MemoryCreate(BaseModel):
     content: str
-    category: str = "fact"   # fact | preference | instruction | event
+    category: str = "fact"
     importance: int = 5
 
 
@@ -93,7 +88,8 @@ class MemoryUpdate(BaseModel):
 async def list_memories(user: User = Depends(_get_user)):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(UserMemory).where(UserMemory.user_id == user.id, UserMemory.is_active == True)
+            select(UserMemory)
+            .where(UserMemory.user_id == user.id, UserMemory.is_active == True)
             .order_by(UserMemory.importance.desc(), UserMemory.created_at)
         )
         mems = result.scalars().all()
@@ -157,26 +153,144 @@ async def delete_memory(memory_id: int, user: User = Depends(_get_user)):
     return {"ok": True}
 
 
+# ── SnapTrade API ──────────────────────────────────────────────────────────
+
+async def _ensure_snaptrade_user(user: User) -> tuple[str, str]:
+    """Register user with SnapTrade if not already done. Returns (user_id, user_secret)."""
+    if user.snaptrade_user_id and user.snaptrade_user_secret:
+        return user.snaptrade_user_id, user.snaptrade_user_secret
+
+    uid = f"starfire_{user.telegram_id}"
+    secret = await snaptrade.register_user(uid)
+    if not secret:
+        raise HTTPException(status_code=502, detail="Failed to register with SnapTrade")
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.id == user.id))
+        db_user = result.scalar_one()
+        db_user.snaptrade_user_id = uid
+        db_user.snaptrade_user_secret = secret
+        await session.commit()
+
+    return uid, secret
+
+
+@router.get("/api/snaptrade/connect")
+async def snaptrade_connect(
+    broker: Optional[str] = Query(None),
+    reconnect: Optional[str] = Query(None),
+    user: User = Depends(_get_user),
+):
+    """Return a one-time SnapTrade portal URL for the user to connect/reconnect a brokerage."""
+    if not settings.snaptrade_client_id:
+        raise HTTPException(status_code=503, detail="SnapTrade not configured")
+
+    uid, secret = await _ensure_snaptrade_user(user)
+    url = await snaptrade.get_login_url(uid, secret, broker=broker, reconnect=reconnect)
+    if not url:
+        raise HTTPException(status_code=502, detail="SnapTrade portal URL unavailable")
+    return {"redirect_url": url}
+
+
+@router.get("/api/snaptrade/accounts")
+async def snaptrade_accounts(user: User = Depends(_get_user)):
+    """Return all connected brokerage accounts with balances and positions."""
+    if not settings.snaptrade_client_id:
+        return {"accounts": []}
+
+    if not user.snaptrade_user_id or not user.snaptrade_user_secret:
+        return {"accounts": []}
+
+    uid, secret = user.snaptrade_user_id, user.snaptrade_user_secret
+
+    accounts = await snaptrade.get_accounts(uid, secret)
+    result = []
+    for acc in accounts:
+        acc_id = acc.get("id") or acc.get("brokerage_authorization", {}).get("id", "")
+        balances = await snaptrade.get_account_balances(uid, secret, acc_id) if acc_id else []
+        positions = await snaptrade.get_positions(uid, secret, acc_id) if acc_id else []
+
+        cash = next(
+            (b.get("cash", 0) for b in balances if isinstance(b, dict) and b.get("currency", {}).get("code") == "USD"),
+            0,
+        )
+        result.append({
+            "id": acc_id,
+            "name": acc.get("name") or acc.get("number") or "Account",
+            "brokerage": (acc.get("institution_name") or
+                          acc.get("brokerage", {}).get("name", "Unknown")),
+            "type": acc.get("meta", {}).get("type", ""),
+            "cash": float(cash or 0),
+            "balances": [
+                {
+                    "currency": b.get("currency", {}).get("code", ""),
+                    "cash": float(b.get("cash", 0)),
+                    "market_value": float(b.get("market_value", 0)),
+                    "total_value": float(b.get("total_value", 0)),
+                }
+                for b in balances if isinstance(b, dict)
+            ],
+            "positions": [
+                {
+                    "symbol": (p.get("symbol", {}).get("symbol") or
+                               p.get("symbol", {}).get("description", "")),
+                    "open_pnl": float(p.get("open_pnl", 0) or 0),
+                    "fractional_units": float(p.get("fractional_units", 0) or 0),
+                    "average_purchase_price": float(p.get("average_purchase_price", 0) or 0),
+                }
+                for p in positions if isinstance(p, dict)
+            ],
+        })
+    return {"accounts": result}
+
+
+@router.get("/api/snaptrade/activities")
+async def snaptrade_activities(user: User = Depends(_get_user)):
+    """Return recent transactions across all connected accounts."""
+    if not settings.snaptrade_client_id:
+        return {"activities": []}
+
+    if not user.snaptrade_user_id or not user.snaptrade_user_secret:
+        return {"activities": []}
+
+    activities = await snaptrade.get_activities(
+        user.snaptrade_user_id, user.snaptrade_user_secret, limit=25
+    )
+    return {
+        "activities": [
+            {
+                "date": a.get("trade_date") or a.get("settlement_date") or "",
+                "type": a.get("type", ""),
+                "symbol": (a.get("symbol", {}).get("symbol") if isinstance(a.get("symbol"), dict) else a.get("symbol", "")),
+                "description": a.get("description", ""),
+                "amount": float(a.get("amount", 0) or 0),
+                "currency": a.get("currency", "USD"),
+                "account": a.get("account", {}).get("name", "") if isinstance(a.get("account"), dict) else "",
+            }
+            for a in activities
+        ]
+    }
+
+
 # ── Dashboard data ─────────────────────────────────────────────────────────
 
 @router.get("/api/data")
 async def dashboard_data(user: User = Depends(_get_user)):
-    """All dashboard data in a single call."""
+    """Core dashboard data: tasks, goals, tickets."""
     async with AsyncSessionLocal() as session:
-        # Tasks
         task_result = await session.execute(
-            select(Task).where(Task.user_id == user.id, Task.status == "PENDING")
-            .order_by(Task.priority.desc()).limit(10)
+            select(Task)
+            .where(Task.user_id == user.id, Task.status == "PENDING")
+            .order_by(Task.priority.desc())
+            .limit(10)
         )
         tasks = task_result.scalars().all()
 
-        # Goals
         goal_result = await session.execute(
             select(Goal).where(Goal.user_id == user.id, Goal.status == "ACTIVE").limit(10)
         )
         goals = goal_result.scalars().all()
 
-        # Open tickets
         ticket_result = await session.execute(
             select(BotTicket).where(
                 BotTicket.user_id == user.id,
@@ -185,80 +299,36 @@ async def dashboard_data(user: User = Depends(_get_user)):
         )
         tickets = ticket_result.scalars().all()
 
-        # OSIRIS report from preferences
-        osiris_report = (user.preferences or {}).get("osiris_report")
-
-    # Live Alpaca data
-    alpaca = None
-    if not settings.use_mock_broker and settings.broker_api_key and settings.broker_api_key != "mock":
-        try:
-            headers = {
-                "APCA-API-KEY-ID": settings.broker_api_key,
-                "APCA-API-SECRET-KEY": settings.broker_api_secret,
-            }
-            base = settings.broker_base_url
-            after = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            async with httpx.AsyncClient(timeout=10) as client:
-                acc, pos, orders = await asyncio.gather(
-                    client.get(f"{base}/v2/account", headers=headers),
-                    client.get(f"{base}/v2/positions", headers=headers),
-                    client.get(f"{base}/v2/orders", headers=headers,
-                               params={"status": "filled", "limit": 20, "after": after, "direction": "desc"}),
-                )
-            acc_data = acc.json() if acc.status_code == 200 else {}
-            pos_data = pos.json() if pos.status_code == 200 else []
-            order_data = orders.json() if orders.status_code == 200 else []
-            if isinstance(order_data, dict):
-                order_data = []
-            alpaca = {
-                "equity": float(acc_data.get("equity", 0)),
-                "cash": float(acc_data.get("cash", 0)),
-                "buying_power": float(acc_data.get("buying_power", 0)),
-                "pnl_today": float(acc_data.get("equity", 0)) - float(acc_data.get("last_equity", 0)),
-                "positions": [
-                    {
-                        "symbol": p["symbol"],
-                        "qty": p["qty"],
-                        "avg_entry": float(p.get("avg_entry_price", 0)),
-                        "unrealized_pl": float(p.get("unrealized_pl", 0)),
-                        "current_price": float(p.get("current_price", 0)),
-                    }
-                    for p in (pos_data if isinstance(pos_data, list) else [])
-                ],
-                "fills": [
-                    {
-                        "symbol": o["symbol"],
-                        "side": o["side"],
-                        "qty": o.get("filled_qty"),
-                        "price": float(o.get("filled_avg_price") or 0),
-                        "filled_at": (o.get("filled_at") or "")[:19],
-                    }
-                    for o in order_data[:15]
-                ],
-            }
-        except Exception:
-            pass
-
     return {
         "user": {"name": user.first_name or user.username or "User"},
+        "snaptrade_connected": bool(user.snaptrade_user_id and user.snaptrade_user_secret),
         "tasks": [
-            {"id": t.id, "title": t.title, "priority": t.priority,
-             "due": t.due_at.isoformat() if t.due_at else None}
+            {
+                "id": t.id,
+                "title": t.title,
+                "priority": t.priority,
+                "due": t.due_at.isoformat() if t.due_at else None,
+            }
             for t in tasks
         ],
         "goals": [
-            {"id": g.id, "title": g.title, "current": float(g.current_value or 0),
-             "target": float(g.target_value or 0), "unit": g.unit}
+            {
+                "id": g.id,
+                "title": g.title,
+                "current": float(g.current_value or 0),
+                "target": float(g.target_value or 0),
+                "unit": g.unit,
+            }
             for g in goals
         ],
         "tickets": [
-            {"id": t.id, "title": t.title, "assigned_to": t.assigned_to,
-             "status": t.status, "priority": t.priority}
+            {
+                "id": t.id,
+                "title": t.title,
+                "assigned_to": t.assigned_to,
+                "status": t.status,
+                "priority": t.priority,
+            }
             for t in tickets
         ],
-        "osiris_report": osiris_report,
-        "alpaca": alpaca,
     }
-
-
-import asyncio

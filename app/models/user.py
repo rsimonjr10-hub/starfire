@@ -15,5 +15,7 @@ class User(Base):
     conversation_history = Column(JSON, default=list)
     google_token_json = Column(Text, nullable=True)   # OAuth2 token JSON
     budget_json = Column(JSON, nullable=True)          # {category: monthly_limit}
+    snaptrade_user_id = Column(String(128), nullable=True)      # SnapTrade userId
+    snaptrade_user_secret = Column(String(256), nullable=True)  # SnapTrade userSecret
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
