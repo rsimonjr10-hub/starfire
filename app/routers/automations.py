@@ -100,6 +100,22 @@ async def create_automation(body: AutomationCreate, user: User = Depends(_get_us
         await session.refresh(a)
     return _serialize(a)
 
+@router.get("/presets")
+async def list_presets():
+    return [{"index": i, **p} for i, p in enumerate(PRESET_AUTOMATIONS)]
+
+@router.post("/presets")
+async def install_all_presets(user: User = Depends(_get_user)):
+    """Install all built-in preset automations for this user."""
+    created = []
+    async with AsyncSessionLocal() as session:
+        for preset in PRESET_AUTOMATIONS:
+            a = Automation(user_id=user.id, **preset)
+            session.add(a)
+            created.append(a)
+        await session.commit()
+    return {"installed": len(created)}
+
 @router.post("/presets/{preset_index}")
 async def install_preset(preset_index: int, user: User = Depends(_get_user)):
     if preset_index < 0 or preset_index >= len(PRESET_AUTOMATIONS):
@@ -112,9 +128,33 @@ async def install_preset(preset_index: int, user: User = Depends(_get_user)):
         await session.refresh(a)
     return _serialize(a)
 
-@router.get("/presets")
-async def list_presets():
-    return [{"index": i, **p} for i, p in enumerate(PRESET_AUTOMATIONS)]
+@router.get("/history")
+async def all_automation_history(limit: int = 20, user: User = Depends(_get_user)):
+    """Recent runs across all automations for the user."""
+    async with AsyncSessionLocal() as session:
+        auto_ids = (await session.execute(
+            select(Automation.id).where(Automation.user_id == user.id)
+        )).scalars().all()
+        if not auto_ids:
+            return []
+        rows = (await session.execute(
+            select(AutomationRun, Automation.name).join(
+                Automation, AutomationRun.automation_id == Automation.id
+            ).where(AutomationRun.automation_id.in_(auto_ids))
+            .order_by(AutomationRun.ran_at.desc()).limit(limit)
+        )).all()
+    return [
+        {
+            "id": r.AutomationRun.id,
+            "automation_id": r.AutomationRun.automation_id,
+            "automation_name": r.name,
+            "was_triggered": r.AutomationRun.status == "success",
+            "reason": r.AutomationRun.triggered_by,
+            "error": r.AutomationRun.error,
+            "created_at": r.AutomationRun.ran_at.isoformat() if r.AutomationRun.ran_at else None,
+        }
+        for r in rows
+    ]
 
 @router.put("/{auto_id}")
 async def update_automation(auto_id: int, body: AutomationUpdate, user: User = Depends(_get_user)):

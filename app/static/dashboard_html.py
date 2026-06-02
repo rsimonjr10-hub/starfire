@@ -360,6 +360,21 @@ tr:hover td { background: rgba(255,255,255,.03); }
     <button class="nav-item" onclick="nav('memory')">
       <span class="nav-icon">🧠</span> Memory
     </button>
+    <button class="nav-item" onclick="nav('knowledge')">
+      <span class="nav-icon">📚</span> Knowledge
+    </button>
+    <button class="nav-item" onclick="nav('life')">
+      <span class="nav-icon">💚</span> Life OS
+    </button>
+    <button class="nav-item" onclick="nav('business')">
+      <span class="nav-icon">🏢</span> Business OS
+    </button>
+    <button class="nav-item" onclick="nav('automations')">
+      <span class="nav-icon">⚡</span> Automations
+    </button>
+    <button class="nav-item" onclick="nav('briefing')">
+      <span class="nav-icon">🤖</span> AI Briefing
+    </button>
 
     <div class="sidebar-footer">
       <div id="conn-status" style="font-size:12px;color:var(--muted);text-align:center"></div>
@@ -516,6 +531,187 @@ tr:hover td { background: rgba(255,255,255,.03); }
       </div>
     </div>
 
+    <!-- ════════════════════════════════ KNOWLEDGE OS ══ -->
+    <div class="section" id="sec-knowledge">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <input id="know-search" class="input input-grow" placeholder="Search your knowledge base…" oninput="searchKnowledge()" />
+          <button class="btn btn-primary btn-sm" onclick="showAddKnowledge()">+ Add</button>
+        </div>
+        <div id="know-add-form" style="display:none;margin-bottom:14px">
+          <input id="know-title" class="input" style="width:100%;margin-bottom:8px" placeholder="Title" />
+          <textarea id="know-content" class="input" style="width:100%;min-height:80px;resize:vertical" placeholder="Content…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+            <select id="know-type" class="input">
+              <option value="note">Note</option>
+              <option value="idea">Idea</option>
+              <option value="document">Document</option>
+              <option value="research">Research</option>
+              <option value="reference">Reference</option>
+            </select>
+            <input id="know-tags" class="input input-grow" placeholder="Tags (comma-separated)" />
+            <button class="btn btn-primary btn-sm" onclick="saveKnowledge()">Save</button>
+            <button class="btn btn-outline btn-sm" onclick="hideAddKnowledge()">Cancel</button>
+          </div>
+        </div>
+        <div id="know-list"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════ LIFE OS ══ -->
+    <div class="section" id="sec-life">
+      <!-- Habits -->
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="card-title">Habits</div>
+          <button class="btn btn-primary btn-sm" onclick="showAddHabit()">+ Add Habit</button>
+        </div>
+        <div id="habit-add-form" style="display:none;margin-bottom:14px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="habit-name" class="input input-grow" placeholder="Habit name" />
+            <select id="habit-freq" class="input">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="saveHabit()">Save</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('habit-add-form').style.display='none'">Cancel</button>
+          </div>
+        </div>
+        <div id="habits-list"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+
+      <!-- Journal -->
+      <div class="two-col-equal">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="card-title">Journal</div>
+            <button class="btn btn-primary btn-sm" onclick="showJournalForm()">+ Entry</button>
+          </div>
+          <div id="journal-form" style="display:none;margin-bottom:14px">
+            <textarea id="jrnl-content" class="input" style="width:100%;min-height:90px;resize:vertical" placeholder="How are you feeling today?"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <input id="jrnl-mood" class="input" style="width:70px" type="number" min="1" max="10" placeholder="Mood" />
+              <input id="jrnl-energy" class="input" style="width:70px" type="number" min="1" max="10" placeholder="Energy" />
+              <input id="jrnl-gratitude" class="input input-grow" placeholder="Grateful for…" />
+              <button class="btn btn-primary btn-sm" onclick="saveJournal()">Save</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('journal-form').style.display='none'">Cancel</button>
+            </div>
+          </div>
+          <div id="journal-list"><div class="empty"><span class="loader"></span></div></div>
+        </div>
+
+        <!-- Health -->
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="card-title">Health Metrics</div>
+            <button class="btn btn-primary btn-sm" onclick="showHealthForm()">+ Log</button>
+          </div>
+          <div id="health-form" style="display:none;margin-bottom:14px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="h-type" class="input">
+                <option value="weight">Weight (lbs)</option>
+                <option value="sleep_hours">Sleep (hrs)</option>
+                <option value="steps">Steps</option>
+                <option value="heart_rate">Heart Rate</option>
+                <option value="water_oz">Water (oz)</option>
+              </select>
+              <input id="h-value" class="input" style="width:90px" type="number" placeholder="Value" step="0.1" />
+              <button class="btn btn-primary btn-sm" onclick="saveHealth()">Log</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('health-form').style.display='none'">Cancel</button>
+            </div>
+          </div>
+          <div id="health-list"><div class="empty"><span class="loader"></span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════ BUSINESS OS ══ -->
+    <div class="section" id="sec-business">
+      <!-- Overview metrics -->
+      <div id="biz-overview" style="margin-bottom:16px">
+        <div class="empty"><span class="loader"></span></div>
+      </div>
+      <!-- Businesses list -->
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="card-title">Businesses</div>
+          <button class="btn btn-primary btn-sm" onclick="showAddBiz()">+ Add</button>
+        </div>
+        <div id="biz-add-form" style="display:none;margin-bottom:14px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="biz-name" class="input input-grow" placeholder="Business name" />
+            <input id="biz-mrr" class="input" style="width:110px" type="number" placeholder="MRR ($)" />
+            <select id="biz-type" class="input">
+              <option value="saas">SaaS</option>
+              <option value="service">Service</option>
+              <option value="ecommerce">E-commerce</option>
+              <option value="other">Other</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="saveBiz()">Save</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('biz-add-form').style.display='none'">Cancel</button>
+          </div>
+        </div>
+        <div id="biz-list"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+      <!-- Invoices -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Recent Invoices</div>
+        <div id="invoice-list"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════ AUTOMATIONS ══ -->
+    <div class="section" id="sec-automations">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="card-title">Active Automations</div>
+          <button class="btn btn-primary btn-sm" onclick="installPresets()">+ Install Presets</button>
+        </div>
+        <div id="auto-list"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Recent Runs</div>
+        <div id="auto-runs"><div class="empty"><span class="loader"></span></div></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════ AI BRIEFING ══ -->
+    <div class="section" id="sec-briefing">
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title" style="margin-bottom:16px">Generate Briefing</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+          <select id="brief-type" class="input">
+            <option value="daily">Daily Briefing</option>
+            <option value="weekly">Weekly Briefing</option>
+            <option value="monthly">Monthly Briefing</option>
+            <option value="quarterly">Quarterly Briefing</option>
+          </select>
+          <button class="btn btn-primary" id="btn-brief" onclick="runBriefing()">Generate</button>
+        </div>
+        <div id="brief-output" style="display:none">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px" id="brief-ts"></div>
+          <div id="brief-text" style="line-height:1.7;font-size:14px;white-space:pre-wrap"></div>
+        </div>
+      </div>
+      <div class="two-col-equal">
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">CFO Agent</div>
+          <div style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.5">Runs a full financial analysis — spending trends, net worth trajectory, business P&L, and cash flow recommendations.</div>
+          <button class="btn btn-primary btn-sm" id="btn-cfo" onclick="runAgent('cfo','btn-cfo','cfo-out')">Run CFO Analysis</button>
+          <div id="cfo-out" style="margin-top:12px;font-size:13px;line-height:1.6;display:none"></div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">Research Agent</div>
+          <div style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.5">Searches your knowledge base using RAG and synthesises insights from your notes, documents, and ideas.</div>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input id="research-q" class="input input-grow" placeholder="Research query…" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="btn-research" onclick="runAgent('research','btn-research','research-out')">Run Research</button>
+          <div id="research-out" style="margin-top:12px;font-size:13px;line-height:1.6;display:none"></div>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -527,11 +723,16 @@ const API   = '/dashboard/api';
 
 // ── Nav ────────────────────────────────────────────────────────────────────
 const TITLES = {
-  dashboard: 'Dashboard',
-  finances:  'Finances',
-  goals:     'Goals',
-  tasks:     'Tasks',
-  memory:    'Memory',
+  dashboard:   'Dashboard',
+  finances:    'Finances',
+  goals:       'Goals',
+  tasks:       'Tasks',
+  memory:      'Memory',
+  knowledge:   'Knowledge OS',
+  life:        'Life OS',
+  business:    'Business OS',
+  automations: 'Automations',
+  briefing:    'AI Briefing',
 };
 
 function nav(id) {
@@ -542,8 +743,13 @@ function nav(id) {
     if (n.textContent.trim().toLowerCase().includes(id.toLowerCase())) n.classList.add('active');
   });
   document.getElementById('page-title').textContent = TITLES[id] || id;
-  if (id === 'finances' && !window._finLoaded) loadFinances();
-  if (id === 'memory'   && !window._memLoaded) loadMemories();
+  if (id === 'finances'    && !window._finLoaded)    loadFinances();
+  if (id === 'memory'      && !window._memLoaded)    loadMemories();
+  if (id === 'knowledge'   && !window._knowLoaded)   loadKnowledge();
+  if (id === 'life'        && !window._lifeLoaded)   loadLife();
+  if (id === 'business'    && !window._bizLoaded)    loadBusiness();
+  if (id === 'automations' && !window._autoLoaded)   loadAutomations();
+  if (id === 'briefing'    && !window._briefLoaded)  initBriefing();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1098,6 +1304,415 @@ async function deleteMem(id) {
   const res = await fetch(`${API}/memories/${id}?token=${TOKEN}`, { method: 'DELETE' });
   if (res.ok) { toast('Deleted'); await loadMemories(); }
   else toast('Failed', true);
+}
+
+// ── Knowledge OS ───────────────────────────────────────────────────────────
+window._knowLoaded = false;
+let _knowItems = [];
+
+async function loadKnowledge() {
+  window._knowLoaded = true;
+  try {
+    const res = await fetch(`/api/knowledge?token=${TOKEN}`);
+    _knowItems = await res.json();
+    renderKnowledge(_knowItems);
+  } catch { document.getElementById('know-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function renderKnowledge(items) {
+  const el = document.getElementById('know-list');
+  if (!items.length) { el.innerHTML = '<div class="empty">No knowledge items yet — add notes, ideas, or documents</div>'; return; }
+  const typeColors = { note:'badge-blue', idea:'badge-purple', document:'badge-green', research:'badge-orange', reference:'badge-blue' };
+  el.innerHTML = items.map(k => `
+    <div class="memory-item">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span class="badge ${typeColors[k.item_type]||'badge-blue'}">${esc(k.item_type)}</span>
+          <b style="font-size:14px">${esc(k.title)}</b>
+        </div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.5">${esc((k.content||'').slice(0,180))}${k.content?.length>180?'…':''}</div>
+        ${k.tags?.length ? `<div style="margin-top:6px">${k.tags.map(t=>`<span class="badge badge-blue" style="margin-right:4px;font-size:10px">${esc(t)}</span>`).join('')}</div>` : ''}
+      </div>
+      <button class="btn-icon del" onclick="deleteKnowledge(${k.id})">🗑</button>
+    </div>`).join('');
+}
+
+function searchKnowledge() {
+  const q = document.getElementById('know-search').value.toLowerCase().trim();
+  if (!q) { renderKnowledge(_knowItems); return; }
+  const filtered = _knowItems.filter(k =>
+    k.title.toLowerCase().includes(q) || (k.content||'').toLowerCase().includes(q)
+  );
+  renderKnowledge(filtered);
+}
+
+function showAddKnowledge() {
+  document.getElementById('know-add-form').style.display = 'block';
+  document.getElementById('know-title').focus();
+}
+function hideAddKnowledge() {
+  document.getElementById('know-add-form').style.display = 'none';
+}
+
+async function saveKnowledge() {
+  const title   = document.getElementById('know-title').value.trim();
+  const content = document.getElementById('know-content').value.trim();
+  if (!title || !content) { toast('Title and content required', true); return; }
+  const tags = document.getElementById('know-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  const res = await fetch(`/api/knowledge?token=${TOKEN}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ title, content, item_type: document.getElementById('know-type').value, tags }),
+  });
+  if (res.ok) {
+    toast('Saved to knowledge base ✓');
+    hideAddKnowledge();
+    document.getElementById('know-title').value = '';
+    document.getElementById('know-content').value = '';
+    window._knowLoaded = false;
+    loadKnowledge();
+  } else toast('Save failed', true);
+}
+
+async function deleteKnowledge(id) {
+  if (!confirm('Delete this knowledge item?')) return;
+  const res = await fetch(`/api/knowledge/${id}?token=${TOKEN}`, { method: 'DELETE' });
+  if (res.ok) { toast('Deleted'); window._knowLoaded = false; loadKnowledge(); }
+  else toast('Failed', true);
+}
+
+// ── Life OS ────────────────────────────────────────────────────────────────
+window._lifeLoaded = false;
+
+async function loadLife() {
+  window._lifeLoaded = true;
+  await Promise.all([loadHabits(), loadJournal(), loadHealth()]);
+}
+
+async function loadHabits() {
+  try {
+    const res = await fetch(`/api/life/habits?token=${TOKEN}`);
+    const habits = await res.json();
+    renderHabits(habits);
+  } catch { document.getElementById('habits-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function renderHabits(habits) {
+  const el = document.getElementById('habits-list');
+  if (!habits.length) { el.innerHTML = '<div class="empty">No habits yet — click + Add Habit</div>'; return; }
+  el.innerHTML = habits.map(h => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:14px">${esc(h.name)}</div>
+        <div style="font-size:12px;color:var(--muted)">${esc(h.frequency)} · Streak: <b style="color:var(--primary)">${h.current_streak || 0}</b> · Total: ${h.total_completions || 0}</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="completeHabit(${h.id})">✓ Done</button>
+    </div>`).join('');
+}
+
+async function completeHabit(id) {
+  const res = await fetch(`/api/life/habits/${id}/complete?token=${TOKEN}`, { method: 'POST' });
+  if (res.ok) { toast('Habit logged ✓'); await loadHabits(); }
+  else toast('Failed', true);
+}
+
+function showAddHabit() {
+  document.getElementById('habit-add-form').style.display = 'block';
+  document.getElementById('habit-name').focus();
+}
+
+async function saveHabit() {
+  const name = document.getElementById('habit-name').value.trim();
+  if (!name) { toast('Name required', true); return; }
+  const res = await fetch(`/api/life/habits?token=${TOKEN}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, frequency: document.getElementById('habit-freq').value }),
+  });
+  if (res.ok) {
+    toast('Habit created ✓');
+    document.getElementById('habit-add-form').style.display = 'none';
+    document.getElementById('habit-name').value = '';
+    await loadHabits();
+  } else toast('Failed', true);
+}
+
+async function loadJournal() {
+  try {
+    const res = await fetch(`/api/life/journal?token=${TOKEN}&limit=5`);
+    const entries = await res.json();
+    const el = document.getElementById('journal-list');
+    if (!entries.length) { el.innerHTML = '<div class="empty">No journal entries yet</div>'; return; }
+    el.innerHTML = entries.map(j => `
+      <div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px">
+          <span>${(j.entry_date||j.created_at||'').slice(0,10)}</span>
+          <span>${j.mood ? '😊 '+j.mood+'/10' : ''} ${j.energy ? '⚡'+j.energy+'/10' : ''}</span>
+        </div>
+        <div style="font-size:13px;line-height:1.5">${esc((j.content||'').slice(0,200))}${j.content?.length>200?'…':''}</div>
+      </div>`).join('');
+  } catch { document.getElementById('journal-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function showJournalForm() {
+  document.getElementById('journal-form').style.display = 'block';
+  document.getElementById('jrnl-content').focus();
+}
+
+async function saveJournal() {
+  const content = document.getElementById('jrnl-content').value.trim();
+  if (!content) { toast('Write something first', true); return; }
+  const body = {
+    content,
+    entry_date: new Date().toISOString().slice(0,10),
+    mood: parseInt(document.getElementById('jrnl-mood').value)||null,
+    energy: parseInt(document.getElementById('jrnl-energy').value)||null,
+    gratitude: document.getElementById('jrnl-gratitude').value.trim()||null,
+  };
+  const res = await fetch(`/api/life/journal?token=${TOKEN}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    toast('Journal entry saved ✓');
+    document.getElementById('journal-form').style.display = 'none';
+    document.getElementById('jrnl-content').value = '';
+    document.getElementById('jrnl-mood').value = '';
+    document.getElementById('jrnl-energy').value = '';
+    document.getElementById('jrnl-gratitude').value = '';
+    await loadJournal();
+  } else toast('Failed', true);
+}
+
+async function loadHealth() {
+  try {
+    const res = await fetch(`/api/life/health?token=${TOKEN}&limit=10`);
+    const metrics = await res.json();
+    const el = document.getElementById('health-list');
+    if (!metrics.length) { el.innerHTML = '<div class="empty">No health data yet — click + Log</div>'; return; }
+    el.innerHTML = `<table style="width:100%;font-size:13px">
+      <tr><th>Metric</th><th>Value</th><th>Date</th></tr>
+      ${metrics.map(m => `<tr>
+        <td>${esc(m.metric_type.replace(/_/g,' '))}</td>
+        <td><b>${m.value}</b> <span style="color:var(--muted)">${esc(m.unit||'')}</span></td>
+        <td style="color:var(--muted)">${(m.recorded_at||m.created_at||'').slice(0,10)}</td>
+      </tr>`).join('')}
+    </table>`;
+  } catch { document.getElementById('health-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function showHealthForm() {
+  document.getElementById('health-form').style.display = 'block';
+  document.getElementById('h-value').focus();
+}
+
+async function saveHealth() {
+  const value = parseFloat(document.getElementById('h-value').value);
+  if (isNaN(value)) { toast('Enter a value', true); return; }
+  const typeMap = { weight:'lbs', sleep_hours:'hrs', steps:'steps', heart_rate:'bpm', water_oz:'oz' };
+  const mtype = document.getElementById('h-type').value;
+  const res = await fetch(`/api/life/health?token=${TOKEN}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ metric_type: mtype, value, unit: typeMap[mtype]||'', recorded_at: new Date().toISOString() }),
+  });
+  if (res.ok) {
+    toast('Health metric logged ✓');
+    document.getElementById('health-form').style.display = 'none';
+    document.getElementById('h-value').value = '';
+    await loadHealth();
+  } else toast('Failed', true);
+}
+
+// ── Business OS ────────────────────────────────────────────────────────────
+window._bizLoaded = false;
+
+async function loadBusiness() {
+  window._bizLoaded = true;
+  try {
+    const [ovRes, bizRes, invRes] = await Promise.all([
+      fetch(`/api/business/overview?token=${TOKEN}`),
+      fetch(`/api/business/businesses?token=${TOKEN}`),
+      fetch(`/api/business/invoices?token=${TOKEN}`),
+    ]);
+    const ov  = await ovRes.json();
+    const biz = await bizRes.json();
+    const inv = await invRes.json();
+    renderBizOverview(ov);
+    renderBizList(biz);
+    renderInvoices(inv);
+  } catch (e) { document.getElementById('biz-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function renderBizOverview(ov) {
+  const el = document.getElementById('biz-overview');
+  if (!ov || ov.total_businesses === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="metrics-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="card"><div class="card-title">Total MRR</div><div class="metric-val green">${money(ov.total_mrr||0)}</div></div>
+    <div class="card"><div class="card-title">Total ARR</div><div class="metric-val blue">${money(ov.total_arr||0)}</div></div>
+    <div class="card"><div class="card-title">Businesses</div><div class="metric-val">${ov.total_businesses||0}</div></div>
+    <div class="card"><div class="card-title">Open Invoices</div><div class="metric-val orange">${money(ov.open_invoices_value||0)}</div></div>
+  </div>`;
+}
+
+function renderBizList(businesses) {
+  const el = document.getElementById('biz-list');
+  if (!businesses.length) { el.innerHTML = '<div class="empty">No businesses yet — click + Add</div>'; return; }
+  el.innerHTML = businesses.map(b => `
+    <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:15px">${esc(b.name)}</div>
+        <div style="font-size:12px;color:var(--muted)">${esc(b.business_type||'')} · ${esc(b.status||'active')}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:16px;font-weight:700;color:var(--success)">${money(b.mrr||0)}<span style="font-size:11px;color:var(--muted)">/mo</span></div>
+        <div style="font-size:11px;color:var(--muted)">ARR ${money(b.arr||0)}</div>
+      </div>
+    </div>`).join('');
+}
+
+function renderInvoices(invoices) {
+  const el = document.getElementById('invoice-list');
+  if (!invoices.length) { el.innerHTML = '<div class="empty">No invoices yet</div>'; return; }
+  const statusMap = { paid:'badge-green', sent:'badge-blue', draft:'badge-orange', overdue:'badge-red' };
+  el.innerHTML = `<table style="width:100%;font-size:13px">
+    <tr><th>Invoice</th><th>Amount</th><th>Status</th><th>Due</th></tr>
+    ${invoices.slice(0,10).map(i => `<tr>
+      <td>${esc(i.invoice_number||'#'+i.id)}</td>
+      <td><b>${money(i.amount||0,2)}</b></td>
+      <td><span class="badge ${statusMap[i.status]||'badge-blue'}">${esc(i.status)}</span></td>
+      <td style="color:var(--muted)">${(i.due_date||'').slice(0,10)||'—'}</td>
+    </tr>`).join('')}
+  </table>`;
+}
+
+function showAddBiz() {
+  document.getElementById('biz-add-form').style.display = 'block';
+  document.getElementById('biz-name').focus();
+}
+
+async function saveBiz() {
+  const name = document.getElementById('biz-name').value.trim();
+  if (!name) { toast('Name required', true); return; }
+  const mrr = parseFloat(document.getElementById('biz-mrr').value)||0;
+  const res = await fetch(`/api/business/businesses?token=${TOKEN}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, mrr, arr: mrr*12, business_type: document.getElementById('biz-type').value }),
+  });
+  if (res.ok) {
+    toast('Business added ✓');
+    document.getElementById('biz-add-form').style.display = 'none';
+    document.getElementById('biz-name').value = '';
+    document.getElementById('biz-mrr').value = '';
+    window._bizLoaded = false;
+    loadBusiness();
+  } else toast('Failed', true);
+}
+
+// ── Automations ────────────────────────────────────────────────────────────
+window._autoLoaded = false;
+
+async function loadAutomations() {
+  window._autoLoaded = true;
+  try {
+    const [autoRes, runRes] = await Promise.all([
+      fetch(`/api/automations?token=${TOKEN}`),
+      fetch(`/api/automations/history?token=${TOKEN}&limit=10`),
+    ]);
+    const autos = await autoRes.json();
+    const runs  = await runRes.json();
+    renderAutomations(autos);
+    renderAutoRuns(runs);
+  } catch { document.getElementById('auto-list').innerHTML = '<div class="empty">Failed to load</div>'; }
+}
+
+function renderAutomations(autos) {
+  const el = document.getElementById('auto-list');
+  if (!autos.length) {
+    el.innerHTML = '<div class="empty">No automations yet — click <b>Install Presets</b> to add built-in rules</div>'; return;
+  }
+  el.innerHTML = autos.map(a => `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:14px">${esc(a.name)}</div>
+        <div style="font-size:12px;color:var(--muted)">${esc(a.trigger_type)} → ${esc(a.action_type)} · ${a.is_active?'<span style="color:var(--success)">Active</span>':'<span style="color:var(--muted)">Paused</span>'}</div>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="runAutomation(${a.id})">▶ Run</button>
+    </div>`).join('');
+}
+
+function renderAutoRuns(runs) {
+  const el = document.getElementById('auto-runs');
+  if (!runs.length) { el.innerHTML = '<div class="empty">No runs yet</div>'; return; }
+  el.innerHTML = `<table style="width:100%;font-size:13px">
+    <tr><th>Automation</th><th>Result</th><th>When</th></tr>
+    ${runs.map(r => `<tr>
+      <td>${esc(r.automation_name||r.automation_id)}</td>
+      <td><span class="badge ${r.was_triggered?'badge-green':'badge-orange'}">${r.was_triggered?'Triggered':'Skipped'}</span></td>
+      <td style="color:var(--muted)">${(r.created_at||'').slice(0,16).replace('T',' ')}</td>
+    </tr>`).join('')}
+  </table>`;
+}
+
+async function installPresets() {
+  const btn = event.target;
+  btn.textContent = 'Installing…'; btn.disabled = true;
+  try {
+    const res = await fetch(`/api/automations/presets?token=${TOKEN}`, { method: 'POST' });
+    const data = await res.json();
+    toast(`Installed ${data.installed||0} preset(s) ✓`);
+    window._autoLoaded = false;
+    loadAutomations();
+  } catch { toast('Failed', true); }
+  finally { btn.textContent = '+ Install Presets'; btn.disabled = false; }
+}
+
+async function runAutomation(id) {
+  const res = await fetch(`/api/automations/${id}/run?token=${TOKEN}`, { method: 'POST' });
+  if (res.ok) { toast('Automation triggered ✓'); await loadAutomations(); }
+  else toast('Failed', true);
+}
+
+// ── AI Briefing ────────────────────────────────────────────────────────────
+window._briefLoaded = false;
+
+function initBriefing() {
+  window._briefLoaded = true;
+}
+
+async function runBriefing() {
+  const btn  = document.getElementById('btn-brief');
+  const type = document.getElementById('brief-type').value;
+  btn.textContent = 'Generating…'; btn.disabled = true;
+  document.getElementById('brief-output').style.display = 'none';
+  try {
+    const res = await fetch(`/api/briefing/generate?briefing_type=${type}&token=${TOKEN}`);
+    if (!res.ok) { toast((await res.json()).detail||'Failed', true); return; }
+    const d = await res.json();
+    document.getElementById('brief-ts').textContent =
+      type.charAt(0).toUpperCase() + type.slice(1) + ' briefing · ' + new Date(d.generated_at).toLocaleString();
+    document.getElementById('brief-text').textContent = d.report;
+    document.getElementById('brief-output').style.display = 'block';
+    toast('Briefing ready ✓');
+  } catch { toast('Generation failed', true); }
+  finally { btn.textContent = 'Generate'; btn.disabled = false; }
+}
+
+async function runAgent(name, btnId, outId) {
+  const btn = document.getElementById(btnId);
+  const out = document.getElementById(outId);
+  const extra = name === 'research' ? { query: document.getElementById('research-q').value } : {};
+  btn.textContent = 'Running…'; btn.disabled = true;
+  out.style.display = 'none';
+  try {
+    const res = await fetch(`/api/briefing/agent/${name}?token=${TOKEN}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ input_data: extra }),
+    });
+    if (!res.ok) { toast((await res.json()).detail||'Failed', true); return; }
+    const d = await res.json();
+    out.style.display = 'block';
+    out.innerHTML = `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Status: ${esc(d.status)} · ${d.duration_ms||0}ms</div>` +
+      `<div style="white-space:pre-wrap">${esc(d.report||'No output')}</div>`;
+    toast(`${name.toUpperCase()} agent done ✓`);
+  } catch { toast('Agent failed', true); }
+  finally { btn.textContent = name === 'cfo' ? 'Run CFO Analysis' : 'Run Research'; btn.disabled = false; }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
