@@ -84,9 +84,11 @@ class TelegramHandlers:
             "/search_email [query] — Search emails\n"
             "/drive [query] — Search Google Drive\n"
             "/connect_google — Link your Google account\n\n"
+            "<b>OSIRIS / Trading</b>\n"
+            "/showp — Live Alpaca paper portfolio (positions, P&amp;L, fills)\n"
+            "/osiris — OSIRIS bridge status\n\n"
             "<b>System</b>\n"
             "/health — System status\n"
-            "/osiris — OSIRIS bridge status\n"
             "/mylink — Your personal dashboard URL\n"
             "/memory — View persistent memory\n\n"
             "<i>Or just talk to me naturally — I understand all of the above in plain language.</i>",
@@ -1030,6 +1032,88 @@ class TelegramHandlers:
     async def cmd_life(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show Life OS summary — habits, journal, health."""
         await self._run_brain(update, "give me my life summary")
+
+    async def cmd_showp(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show live Alpaca paper trading portfolio — account, positions, recent fills."""
+        await update.message.chat.send_action("typing")
+        try:
+            from app.osiris.broker import AlpacaBroker
+            broker = AlpacaBroker()
+            import asyncio as _asyncio
+            account, positions, orders = await _asyncio.gather(
+                broker.get_account(),
+                broker.get_positions(),
+                broker.get_recent_orders(),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"⚠️ Could not reach Alpaca: <code>{e}</code>\n\n"
+                "Check <b>BROKER_API_KEY</b>, <b>BROKER_API_SECRET</b>, and <b>USE_MOCK_BROKER=false</b> in Railway.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        lines = ["<b>📊 OSIRIS Paper Portfolio</b>\n"]
+
+        # Account summary
+        if isinstance(account, dict):
+            equity     = float(account.get("equity", 0))
+            last_eq    = float(account.get("last_equity", 0))
+            pnl_today  = equity - last_eq
+            bp         = float(account.get("buying_power", 0))
+            cash       = float(account.get("cash", 0))
+            sign       = "+" if pnl_today >= 0 else ""
+            icon       = "🟢" if pnl_today >= 0 else "🔴"
+            lines.append(
+                f"{icon} P/L Today: <code>{sign}${pnl_today:,.2f}</code>\n"
+                f"Equity: <code>${equity:,.2f}</code>\n"
+                f"Cash: <code>${cash:,.2f}</code>\n"
+                f"Buying Power: <code>${bp:,.2f}</code>"
+            )
+        else:
+            lines.append("⚠️ Could not fetch account details.")
+
+        # Open positions
+        if isinstance(positions, list) and positions:
+            lines.append("\n<b>Open Positions</b>")
+            for p in positions:
+                sym      = p.get("symbol", "")
+                qty      = p.get("qty", "?")
+                avg      = float(p.get("avg_entry_price", 0))
+                mkt_val  = float(p.get("market_value", 0))
+                unreal   = float(p.get("unrealized_pl", 0))
+                unreal_p = float(p.get("unrealized_plpc", 0)) * 100
+                u_sign   = "+" if unreal >= 0 else ""
+                u_icon   = "🟢" if unreal >= 0 else "🔴"
+                lines.append(
+                    f"{u_icon} <b>{sym}</b>  {qty} @ <code>${avg:.2f}</code>  "
+                    f"MV <code>${mkt_val:,.0f}</code>  "
+                    f"<code>{u_sign}${unreal:,.2f} ({u_sign}{unreal_p:.1f}%)</code>"
+                )
+        elif isinstance(positions, list):
+            lines.append("\n<i>No open positions.</i>")
+        else:
+            lines.append(f"\n⚠️ Positions error: {positions}")
+
+        # Recent fills
+        if isinstance(orders, list) and orders:
+            lines.append("\n<b>Recent Fills</b>")
+            for o in orders[:8]:
+                sym       = o.get("symbol", "")
+                side      = o.get("side", "").upper()
+                qty       = o.get("filled_qty") or o.get("qty", "?")
+                price     = float(o.get("filled_avg_price") or 0)
+                filled_at = (o.get("filled_at") or "")[:10]
+                side_icon = "🟢" if side == "BUY" else "🔴"
+                lines.append(
+                    f"{side_icon} <b>{sym}</b> {side} × {qty} "
+                    f"@ <code>${price:.2f}</code>  <i>{filled_at}</i>"
+                )
+        elif isinstance(orders, list):
+            lines.append("\n<i>No recent fills.</i>")
+
+        await self._safe_reply(update, "\n".join(lines))
 
     async def _run_brain(self, update: Update, text: str) -> None:
         """Route arbitrary text through STARFIRE brain and reply."""
