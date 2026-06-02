@@ -197,14 +197,36 @@ class GmailService:
         bcc: Optional[str] = None,
         reply_to_thread: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
-    ) -> bool:
+    ) -> Optional[str]:
+        """Send an email. Returns the message ID on success, None on failure."""
         try:
             _, send_body = self._build_mime(to, subject, body, cc, bcc, reply_to_thread, reply_to_message_id)
-            self._svc.users().messages().send(userId="me", body=send_body).execute()
-            return True
+            result = self._svc.users().messages().send(userId="me", body=send_body).execute()
+            return result.get("id")
         except Exception as e:
             logger.error("gmail_send_error", to=to, error=str(e))
+            return None
+
+    def verify_sent(self, message_id: str) -> bool:
+        """Confirm a sent message actually appears in the Gmail SENT folder."""
+        try:
+            msg = self._svc.users().messages().get(
+                userId="me", id=message_id, format="minimal"
+            ).execute()
+            labels = msg.get("labelIds", [])
+            return "SENT" in labels
+        except Exception as e:
+            logger.error("gmail_verify_sent_error", message_id=message_id, error=str(e))
             return False
+
+    def send_draft(self, draft_id: str) -> Optional[str]:
+        """Send a saved draft. Returns the sent message ID on success, None on failure."""
+        try:
+            result = self._svc.users().drafts().send(userId="me", body={"id": draft_id}).execute()
+            return result.get("id")
+        except Exception as e:
+            logger.error("gmail_send_draft_error", draft_id=draft_id, error=str(e))
+            return None
 
     def create_draft(
         self,
@@ -230,15 +252,6 @@ class GmailService:
         except Exception as e:
             logger.error("gmail_create_draft_error", to=to, error=str(e))
             return None
-
-    def send_draft(self, draft_id: str) -> bool:
-        """Send a saved draft by its draft ID."""
-        try:
-            self._svc.users().drafts().send(userId="me", body={"id": draft_id}).execute()
-            return True
-        except Exception as e:
-            logger.error("gmail_send_draft_error", draft_id=draft_id, error=str(e))
-            return False
 
     def list_drafts(self, limit: int = 10) -> list[dict]:
         """List saved drafts."""

@@ -779,20 +779,28 @@ class DecisionEngine:
                 body = action.get("body", "")
                 if not to or not subject or not body:
                     return "Missing to/subject/body."
-                success = gmail.send_email(
+                message_id = gmail.send_email(
                     to=to, subject=subject, body=body,
                     cc=action.get("cc"), bcc=action.get("bcc"),
                     reply_to_thread=action.get("reply_to_thread"),
                     reply_to_message_id=action.get("reply_to_message_id"),
                 )
-                if success:
-                    cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
+                if not message_id:
+                    return "❌ Send failed — Gmail API returned an error. The email was NOT sent. Want me to try again?"
+                # Verify it actually landed in the sent folder
+                confirmed = gmail.verify_sent(message_id)
+                cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
+                if confirmed:
                     return (
-                        f"✅ Sent to *{to}*{cc_str}\n"
+                        f"✅ Sent and verified — confirmed in your Gmail sent folder.\n"
+                        f"To: *{to}*{cc_str}\n"
                         f"Subject: _{subject}_\n"
-                        f"_(Confirmed in your Gmail sent folder.)_"
+                        f"Message ID: `{message_id}`"
                     )
-                return "❌ Send failed — Gmail API returned an error. The email was NOT sent. Want me to try again?"
+                return (
+                    f"⚠️ Email was submitted to Gmail (ID: `{message_id}`) but I could not verify it in your sent folder. "
+                    f"Check Gmail → Sent to confirm. Do not resend unless it's missing."
+                )
 
             if action_type == "DRAFT_EMAIL":
                 to = action.get("to", "")
@@ -822,8 +830,19 @@ class DecisionEngine:
                 draft_id = action.get("draft_id", "")
                 if not draft_id:
                     return "Which draft? Give me the draft ID."
-                ok = gmail.send_draft(draft_id)
-                return "Draft sent ✓" if ok else "Failed to send draft. Check the ID."
+                message_id = gmail.send_draft(draft_id)
+                if not message_id:
+                    return "❌ Failed to send draft — Gmail API returned an error. The email was NOT sent."
+                confirmed = gmail.verify_sent(message_id)
+                if confirmed:
+                    return (
+                        f"✅ Draft sent and verified — confirmed in your Gmail sent folder.\n"
+                        f"Message ID: `{message_id}`"
+                    )
+                return (
+                    f"⚠️ Draft submitted (ID: `{message_id}`) but could not verify in sent folder. "
+                    f"Check Gmail → Sent before resending."
+                )
 
             if action_type == "LIST_DRAFTS":
                 drafts = gmail.list_drafts(limit=action.get("limit", 10))
