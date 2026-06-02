@@ -50,6 +50,15 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("mylink", h.cmd_mylink))
         _application.add_handler(CommandHandler("memory", h.cmd_memory))
 
+        # Starfire One — Life OS, Knowledge OS, Business OS, AI Briefing
+        _application.add_handler(CommandHandler("brief", h.cmd_brief))
+        _application.add_handler(CommandHandler("habits", h.cmd_habits))
+        _application.add_handler(CommandHandler("journal", h.cmd_journal))
+        _application.add_handler(CommandHandler("biz", h.cmd_biz))
+        _application.add_handler(CommandHandler("know", h.cmd_know))
+        _application.add_handler(CommandHandler("cfo", h.cmd_cfo))
+        _application.add_handler(CommandHandler("life", h.cmd_life))
+
         # Google (Gmail + Drive + Calendar + Sheets)
         _application.add_handler(CommandHandler("connect_google", h.cmd_connect_google))
         _application.add_handler(CommandHandler("inbox", h.cmd_inbox))

@@ -13,6 +13,8 @@ from app.starfire.prompts import (
     GOAL_CONTEXT_TEMPLATE,
     BILLS_CONTEXT_TEMPLATE,
     DATA_RESULT_TEMPLATE,
+    LIFE_CONTEXT_TEMPLATE,
+    BUSINESS_CONTEXT_TEMPLATE,
 )
 from app.models import User, PortfolioState, Task, Goal, Bill, BotTicket, UserMemory
 from app.risk.engine import RiskEngine
@@ -138,6 +140,42 @@ class DecisionEngine:
             return await self._add_bill(user, action)
         if action_type == "MARK_BILL_PAID":
             return await self._mark_bill_paid(user, action)
+
+        # ── LIFE OS ─────────────────────────────────────────────────────
+        if action_type == "LOG_HABIT":
+            return await self._log_habit(user, action)
+        if action_type == "ADD_HABIT":
+            return await self._add_habit(user, action)
+        if action_type == "HABIT_STATUS":
+            return await self._habit_status(user)
+        if action_type == "LOG_JOURNAL":
+            return await self._log_journal(user, action)
+        if action_type == "VIEW_JOURNAL":
+            return await self._view_journal(user, action)
+        if action_type == "LOG_HEALTH":
+            return await self._log_health(user, action)
+        if action_type == "LIFE_SUMMARY":
+            return await self._life_summary(user)
+
+        # ── KNOWLEDGE OS ────────────────────────────────────────────────
+        if action_type == "ADD_KNOWLEDGE":
+            return await self._add_knowledge(user, action)
+        if action_type == "SEARCH_KNOWLEDGE":
+            return await self._search_knowledge(user, action, history, context)
+
+        # ── BUSINESS OS ─────────────────────────────────────────────────
+        if action_type == "BUSINESS_OVERVIEW":
+            return await self._business_overview(user)
+        if action_type == "ADD_BUSINESS":
+            return await self._add_business(user, action)
+
+        # ── AI BRIEFING & AGENTS ────────────────────────────────────────
+        if action_type == "GENERATE_BRIEFING":
+            return await self._generate_briefing(user, action)
+        if action_type == "RUN_CFO_AGENT":
+            return await self._run_agent(user, "cfo", action)
+        if action_type == "RUN_RESEARCH_AGENT":
+            return await self._run_agent(user, "research", action)
 
         return action.get("message", "Action processed.")
 
@@ -1417,6 +1455,324 @@ class DecisionEngine:
         return "Budget updated:\n" + "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────────────────
+    # LIFE OS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _log_habit(self, user: User, action: dict) -> str:
+        from app.models.habit import Habit, HabitLog
+        habit_name = action.get("habit_name", "").strip()
+        # Find matching habit
+        result = await self.db.execute(
+            select(Habit).where(
+                Habit.user_id == user.id,
+                Habit.is_active == True,
+                Habit.name.ilike(f"%{habit_name}%"),
+            ).limit(1)
+        )
+        habit = result.scalar_one_or_none()
+        if not habit:
+            return (
+                f"No active habit matching '{habit_name}' found. "
+                "Use ADD_HABIT to create one, or check the name."
+            )
+        today = datetime.now(timezone.utc).date()
+        # Idempotent — don't double-count same day
+        existing = await self.db.execute(
+            select(HabitLog).where(
+                HabitLog.habit_id == habit.id,
+                HabitLog.completed_date == today,
+            )
+        )
+        if existing.scalar_one_or_none():
+            return f"✅ *{habit.name}* already logged today (streak: {habit.current_streak})."
+        log = HabitLog(habit_id=habit.id, user_id=user.id, completed_date=today)
+        self.db.add(log)
+        habit.total_completions = (habit.total_completions or 0) + 1
+        habit.last_completed_date = today
+        # Update streak
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        if habit.last_completed_date == yesterday or habit.current_streak == 0:
+            habit.current_streak = (habit.current_streak or 0) + 1
+        else:
+            habit.current_streak = 1
+        if (habit.current_streak or 0) > (habit.longest_streak or 0):
+            habit.longest_streak = habit.current_streak
+        await self.db.flush()
+        streak_msg = f"🔥 {habit.current_streak} day streak!" if habit.current_streak > 1 else "Day 1 — great start!"
+        return f"✅ *{habit.name}* logged for today. {streak_msg}"
+
+    async def _add_habit(self, user: User, action: dict) -> str:
+        from app.models.habit import Habit
+        name = action.get("name", "").strip()
+        if not name:
+            return "What should I call this habit?"
+        frequency = action.get("frequency", "daily")
+        habit = Habit(user_id=user.id, name=name, frequency=frequency)
+        self.db.add(habit)
+        await self.db.flush()
+        return f"📋 Habit created: *{name}* ({frequency}). Say 'I did {name.lower()} today' to log it."
+
+    async def _habit_status(self, user: User) -> str:
+        from app.models.habit import Habit
+        result = await self.db.execute(
+            select(Habit).where(Habit.user_id == user.id, Habit.is_active == True)
+            .order_by(Habit.current_streak.desc())
+        )
+        habits = result.scalars().all()
+        if not habits:
+            return "No active habits yet. Tell me to 'add a daily habit' to start tracking."
+        today = datetime.now(timezone.utc).date()
+        lines = ["*Habit Status*\n"]
+        for h in habits:
+            done_today = h.last_completed_date == today
+            status = "✅" if done_today else "⬜"
+            streak = h.current_streak or 0
+            fire = " 🔥" if streak >= 3 else ""
+            lines.append(f"{status} *{h.name}* — {h.frequency} · streak: {streak}{fire} · total: {h.total_completions or 0}")
+        return "\n".join(lines)
+
+    async def _log_journal(self, user: User, action: dict) -> str:
+        from app.models.journal_entry import JournalEntry
+        content = action.get("content", "").strip()
+        if not content:
+            return "What would you like to journal? Share your thoughts."
+        today = datetime.now(timezone.utc).date()
+        entry = JournalEntry(
+            user_id=user.id,
+            entry_date=today,
+            content=content,
+            mood=action.get("mood"),
+            energy=action.get("energy"),
+            gratitude=action.get("gratitude"),
+            intentions=action.get("intentions"),
+            wins=action.get("wins"),
+            challenges=action.get("challenges"),
+        )
+        self.db.add(entry)
+        await self.db.flush()
+        extras = []
+        if entry.mood:
+            extras.append(f"Mood: {entry.mood}/10")
+        if entry.energy:
+            extras.append(f"Energy: {entry.energy}/10")
+        extra_str = f"\n_{', '.join(extras)}_" if extras else ""
+        return f"📓 Journal entry saved for {today.strftime('%B %d')}.\n_{content[:100]}{'...' if len(content) > 100 else ''}_" + extra_str
+
+    async def _view_journal(self, user: User, action: dict) -> str:
+        from app.models.journal_entry import JournalEntry
+        limit = int(action.get("limit", 5))
+        result = await self.db.execute(
+            select(JournalEntry).where(JournalEntry.user_id == user.id)
+            .order_by(JournalEntry.entry_date.desc()).limit(limit)
+        )
+        entries = result.scalars().all()
+        if not entries:
+            return "No journal entries yet. Tell me to log a journal entry."
+        lines = [f"*Recent Journal ({len(entries)} entries)*\n"]
+        for e in entries:
+            date_str = e.entry_date.strftime("%b %d") if e.entry_date else "—"
+            mood_str = f" · Mood {e.mood}/10" if e.mood else ""
+            lines.append(f"*{date_str}*{mood_str}\n_{e.content[:150]}{'...' if len(e.content) > 150 else ''}_\n")
+        return "\n".join(lines)
+
+    async def _log_health(self, user: User, action: dict) -> str:
+        from app.models.health_metric import HealthMetric
+        metric_type = action.get("metric_type", "").strip()
+        value = action.get("value")
+        if not metric_type or value is None:
+            return "What metric and value? e.g. 'Log my weight at 185 lbs'"
+        unit = action.get("unit", "")
+        metric = HealthMetric(
+            user_id=user.id,
+            metric_type=metric_type,
+            value=float(value),
+            unit=unit,
+            notes=action.get("notes"),
+            recorded_at=datetime.now(timezone.utc),
+        )
+        self.db.add(metric)
+        await self.db.flush()
+        label = metric_type.replace("_", " ")
+        return f"💪 Health logged: *{label}* = {value} {unit}".strip()
+
+    async def _life_summary(self, user: User) -> str:
+        from app.models.habit import Habit, HabitLog
+        from app.models.journal_entry import JournalEntry
+        from app.models.health_metric import HealthMetric
+        today = datetime.now(timezone.utc).date()
+        parts = ["*Life OS Summary*\n"]
+
+        # Habits
+        result = await self.db.execute(
+            select(Habit).where(Habit.user_id == user.id, Habit.is_active == True)
+            .order_by(Habit.current_streak.desc())
+        )
+        habits = result.scalars().all()
+        if habits:
+            done = sum(1 for h in habits if h.last_completed_date == today)
+            parts.append(f"*Habits* — {done}/{len(habits)} done today")
+            for h in habits[:5]:
+                status = "✅" if h.last_completed_date == today else "⬜"
+                parts.append(f"  {status} {h.name} (🔥{h.current_streak or 0})")
+
+        # Latest journal
+        jres = await self.db.execute(
+            select(JournalEntry).where(JournalEntry.user_id == user.id)
+            .order_by(JournalEntry.entry_date.desc()).limit(1)
+        )
+        j = jres.scalar_one_or_none()
+        if j:
+            mood_str = f" · Mood {j.mood}/10" if j.mood else ""
+            parts.append(f"\n*Last Journal* — {j.entry_date}{mood_str}\n_{j.content[:120]}..._")
+
+        # Recent health
+        hres = await self.db.execute(
+            select(HealthMetric).where(HealthMetric.user_id == user.id)
+            .order_by(HealthMetric.recorded_at.desc()).limit(4)
+        )
+        metrics = hres.scalars().all()
+        if metrics:
+            parts.append("\n*Recent Health*")
+            for m in metrics:
+                date_str = m.recorded_at.strftime("%b %d") if m.recorded_at else "—"
+                parts.append(f"  {m.metric_type.replace('_',' ')}: {m.value} {m.unit or ''} ({date_str})")
+
+        return "\n".join(parts) if len(parts) > 1 else "No life data logged yet."
+
+    # ─────────────────────────────────────────────────────────────────────
+    # KNOWLEDGE OS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _add_knowledge(self, user: User, action: dict) -> str:
+        from app.models.knowledge_item import KnowledgeItem
+        from app.services.embeddings import embed
+        title = action.get("title", "").strip()
+        content = action.get("content", "").strip()
+        if not title or not content:
+            return "Need both a title and content to save to the knowledge base."
+        tags = action.get("tags", [])
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        item = KnowledgeItem(
+            user_id=user.id,
+            title=title,
+            content=content,
+            item_type=action.get("item_type", "note"),
+            tags=tags,
+        )
+        self.db.add(item)
+        await self.db.flush()
+        # Embed asynchronously — don't block the response
+        try:
+            vec = await embed(f"{title}\n{content}")
+            if vec:
+                item.embedding = vec
+        except Exception:
+            pass
+        return f"📚 Saved to knowledge base: *{title}*\n_Type: {item.item_type}{' · Tags: ' + ', '.join(tags) if tags else ''}_"
+
+    async def _search_knowledge(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
+        from app.services.rag import search, build_rag_context
+        query = action.get("query", "").strip()
+        if not query:
+            return "What should I search for in your knowledge base?"
+        results = await search(self.db, user.id, query, limit=5)
+        if not results:
+            return f"No knowledge items found matching '{query}'. Try a different search."
+        rag_ctx = (context or "") + await build_rag_context(self.db, user.id, query, max_chars=3000)
+        synthesis = await self.brain.think(
+            f"Synthesize the following knowledge base results for: '{query}'",
+            history, rag_ctx,
+        )
+        header = f"*Knowledge Search: {query}* ({len(results)} results)\n\n"
+        if synthesis["type"] == "chat" and synthesis["content"].strip():
+            return header + synthesis["content"]
+        lines = [header]
+        for r in results:
+            lines.append(f"• *{r.title}* ({r.item_type})\n  _{r.content[:150]}..._")
+        return "\n".join(lines)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # BUSINESS OS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _business_overview(self, user: User) -> str:
+        from app.models.business import Business, Invoice
+        bres = await self.db.execute(
+            select(Business).where(Business.user_id == user.id, Business.status == "active")
+        )
+        businesses = bres.scalars().all()
+        if not businesses:
+            return "No businesses tracked yet. Say 'add a business called X with MRR $Y' to start."
+        total_mrr = sum(float(b.mrr or 0) for b in businesses)
+        total_arr = sum(float(b.arr or 0) for b in businesses)
+        lines = [f"*Business OS Overview*\n"]
+        lines.append(f"Total MRR: *${total_mrr:,.0f}/mo* | ARR: *${total_arr:,.0f}/yr*\n")
+        for b in businesses:
+            lines.append(f"• *{b.name}* ({b.business_type or 'business'})\n  MRR: ${float(b.mrr or 0):,.0f} · ARR: ${float(b.arr or 0):,.0f}")
+        # Open invoices
+        ires = await self.db.execute(
+            select(Invoice).where(Invoice.user_id == user.id, Invoice.status.in_(["sent", "draft"]))
+        )
+        invoices = ires.scalars().all()
+        if invoices:
+            open_val = sum(float(i.amount or 0) for i in invoices)
+            lines.append(f"\n*Open Invoices:* {len(invoices)} · ${open_val:,.0f} outstanding")
+        return "\n".join(lines)
+
+    async def _add_business(self, user: User, action: dict) -> str:
+        from app.models.business import Business
+        name = action.get("name", "").strip()
+        if not name:
+            return "What should I call this business?"
+        mrr = float(action.get("mrr", 0))
+        biz = Business(
+            user_id=user.id,
+            name=name,
+            mrr=mrr,
+            arr=mrr * 12,
+            business_type=action.get("business_type", action.get("type", "other")),
+            status="active",
+        )
+        self.db.add(biz)
+        await self.db.flush()
+        arr_str = f" · ARR ${mrr * 12:,.0f}" if mrr else ""
+        return f"🏢 Business added: *{name}*{f' — MRR ${mrr:,.0f}/mo' + arr_str if mrr else ''}"
+
+    # ─────────────────────────────────────────────────────────────────────
+    # AI BRIEFING & AGENTS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _generate_briefing(self, user: User, action: dict) -> str:
+        from app.services.briefing import generate_briefing
+        btype = action.get("briefing_type", "daily")
+        try:
+            report = await generate_briefing(self.db, user, btype)
+            return f"📋 *{btype.title()} Briefing*\n\n{report}"
+        except Exception as e:
+            logger.error("briefing_error", error=str(e))
+            return f"Briefing generation failed: {e}"
+
+    async def _run_agent(self, user: User, agent_name: str, action: dict) -> str:
+        from app.agents.cfo_agent import CFOAgent
+        from app.agents.research_agent import ResearchAgent
+        agent_map = {"cfo": CFOAgent, "research": ResearchAgent}
+        agent_cls = agent_map.get(agent_name)
+        if not agent_cls:
+            return f"Unknown agent: {agent_name}"
+        input_data = {}
+        if agent_name == "research" and action.get("query"):
+            input_data["query"] = action["query"]
+        try:
+            run = await agent_cls().execute(self.db, user, input_data, trigger="telegram")
+            header = "🤖 *CFO Analysis*" if agent_name == "cfo" else "🔬 *Research Report*"
+            status_str = f" _{run.status} · {run.duration_ms or 0}ms_\n\n" if run.duration_ms else "\n\n"
+            return f"{header}{status_str}{run.report_text or 'No output returned.'}"
+        except Exception as e:
+            logger.error("agent_run_error", agent=agent_name, error=str(e))
+            return f"Agent failed: {e}"
+
+    # ─────────────────────────────────────────────────────────────────────
     # MEMORY
     # ─────────────────────────────────────────────────────────────────────
 
@@ -1561,6 +1917,58 @@ class DecisionEngine:
                 upcoming.append(f"- {b.name}: ${float(b.amount):.2f} due {b.due_date.strftime('%b %d')}")
         if upcoming:
             parts.append(BILLS_CONTEXT_TEMPLATE.format(bills="\n".join(upcoming)))
+
+        # Life OS — habits + today's journal
+        try:
+            from app.models.habit import Habit
+            from app.models.journal_entry import JournalEntry
+            hab_res = await self.db.execute(
+                select(Habit).where(Habit.user_id == user.id, Habit.is_active == True)
+                .order_by(Habit.current_streak.desc()).limit(8)
+            )
+            habits = hab_res.scalars().all()
+            jrn_res = await self.db.execute(
+                select(JournalEntry).where(JournalEntry.user_id == user.id)
+                .order_by(JournalEntry.entry_date.desc()).limit(1)
+            )
+            latest_journal = jrn_res.scalar_one_or_none()
+            if habits or latest_journal:
+                today = now.date()
+                habit_lines = "\n".join(
+                    f"- {'✅' if h.last_completed_date == today else '⬜'} {h.name} "
+                    f"(streak: {h.current_streak or 0}, freq: {h.frequency})"
+                    for h in habits
+                ) if habits else "None"
+                journal_text = (
+                    f"[{latest_journal.entry_date}] Mood:{latest_journal.mood or '?'}/10 "
+                    f"Energy:{latest_journal.energy or '?'}/10 — {latest_journal.content[:200]}"
+                ) if latest_journal else "No recent entry"
+                parts.append(LIFE_CONTEXT_TEMPLATE.format(
+                    habits=habit_lines,
+                    journal=journal_text,
+                    health="(use LOG_HEALTH to track)",
+                ))
+        except Exception:
+            pass
+
+        # Business OS
+        try:
+            from app.models.business import Business
+            biz_res = await self.db.execute(
+                select(Business).where(Business.user_id == user.id, Business.status == "active")
+            )
+            businesses = biz_res.scalars().all()
+            if businesses:
+                total_mrr = sum(float(b.mrr or 0) for b in businesses)
+                biz_lines = "\n".join(
+                    f"- {b.name}: MRR ${float(b.mrr or 0):,.0f}/mo, ARR ${float(b.arr or 0):,.0f}"
+                    for b in businesses
+                )
+                parts.append(BUSINESS_CONTEXT_TEMPLATE.format(
+                    summary=f"Total MRR: ${total_mrr:,.0f}/mo\n{biz_lines}"
+                ))
+        except Exception:
+            pass
 
         # System status
         osiris_ok = osiris_telegram.is_available()

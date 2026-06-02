@@ -56,29 +56,41 @@ class TelegramHandlers:
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
-            "*STARFIRE Commands*\n\n"
-            "*Tasks & Goals*\n"
+            "<b>STARFIRE Commands</b>\n\n"
+            "<b>Tasks &amp; Goals</b>\n"
             "/week — This week's tasks\n"
             "/tasks — All pending tasks\n"
             "/done [id] — Mark task complete\n"
             "/goals — Active goals\n\n"
-            "*Money*\n"
-            "/bills — Bills & subscriptions\n"
+            "<b>Money</b>\n"
+            "/bills — Bills &amp; subscriptions\n"
             "/paid [id] — Mark bill as paid\n"
             "/spending — 30-day spending summary\n"
             "/log [amount] [category] [desc] — Log expense\n"
             "/budget — Budget vs actual\n\n"
-            "*Gmail & Drive*\n"
+            "<b>Life OS</b>\n"
+            "/habits — Habit streaks &amp; today's status\n"
+            "/journal [text] — View or add a journal entry\n"
+            "/life — Full Life OS summary\n\n"
+            "<b>Business OS</b>\n"
+            "/biz — MRR, ARR &amp; invoice overview\n\n"
+            "<b>Knowledge OS</b>\n"
+            "/know [query] — Search your knowledge base\n\n"
+            "<b>AI Briefing &amp; Agents</b>\n"
+            "/brief [daily|weekly|monthly|quarterly] — Generate AI briefing\n"
+            "/cfo — Run CFO financial analysis agent\n\n"
+            "<b>Gmail &amp; Drive</b>\n"
             "/inbox — Unread emails\n"
-            "/search\\_email [query] — Search emails\n"
+            "/search_email [query] — Search emails\n"
             "/drive [query] — Search Google Drive\n"
-            "/connect\\_google — Link your Google account\n\n"
-            "*System*\n"
+            "/connect_google — Link your Google account\n\n"
+            "<b>System</b>\n"
             "/health — System status\n"
-            "/osiris — OSIRIS bridge status\n\n"
-            "_For market data, prices & news — ask @Lumiscapital\\_bot_\n\n"
-            "Or just talk to me naturally.",
-            parse_mode=ParseMode.MARKDOWN,
+            "/osiris — OSIRIS bridge status\n"
+            "/mylink — Your personal dashboard URL\n"
+            "/memory — View persistent memory\n\n"
+            "<i>Or just talk to me naturally — I understand all of the above in plain language.</i>",
+            parse_mode=ParseMode.HTML,
         )
 
     # ------------------------------------------------------------------ #
@@ -979,6 +991,45 @@ class TelegramHandlers:
     async def cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """List stored memories via the brain."""
         await self._run_brain(update, "list my memories")
+
+    async def cmd_brief(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Generate a daily AI briefing."""
+        btype = (context.args[0] if context.args else "daily").lower()
+        if btype not in ("daily", "weekly", "monthly", "quarterly"):
+            btype = "daily"
+        await self._run_brain(update, f"generate my {btype} briefing")
+
+    async def cmd_habits(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show habit status and streaks."""
+        await self._run_brain(update, "show my habit status")
+
+    async def cmd_journal(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show recent journal entries or log a new one."""
+        if context.args:
+            entry_text = " ".join(context.args)
+            await self._run_brain(update, f"journal entry: {entry_text}")
+        else:
+            await self._run_brain(update, "show my recent journal entries")
+
+    async def cmd_biz(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show business OS overview — MRR, ARR, invoices."""
+        await self._run_brain(update, "show business overview")
+
+    async def cmd_know(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Search the knowledge base."""
+        if context.args:
+            query = " ".join(context.args)
+            await self._run_brain(update, f"search my knowledge base for: {query}")
+        else:
+            await self._run_brain(update, "show my knowledge base items")
+
+    async def cmd_cfo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Run the CFO agent for financial analysis."""
+        await self._run_brain(update, "run the CFO agent and give me a full financial analysis")
+
+    async def cmd_life(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show Life OS summary — habits, journal, health."""
+        await self._run_brain(update, "give me my life summary")
 
     async def _run_brain(self, update: Update, text: str) -> None:
         """Route arbitrary text through STARFIRE brain and reply."""
