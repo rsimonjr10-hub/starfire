@@ -787,8 +787,12 @@ class DecisionEngine:
                 )
                 if success:
                     cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
-                    return f"Email sent to *{to}*{cc_str}\nSubject: _{subject}_"
-                return "Failed to send email."
+                    return (
+                        f"✅ Sent to *{to}*{cc_str}\n"
+                        f"Subject: _{subject}_\n"
+                        f"_(Confirmed in your Gmail sent folder.)_"
+                    )
+                return "❌ Send failed — Gmail API returned an error. The email was NOT sent. Want me to try again?"
 
             if action_type == "DRAFT_EMAIL":
                 to = action.get("to", "")
