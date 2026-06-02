@@ -1,7 +1,7 @@
 """
-Audio transcription via Whisper.
+Audio transcription via Whisper / GPT-4o Speech.
 
-Priority: Groq (fast, free tier) → OpenAI → error.
+Priority: Groq (fast, free tier) → OpenAI gpt-4o-transcribe → gpt-4o-mini-transcribe → error.
 Both APIs share the same multipart interface so the same helper works for both.
 """
 import io
@@ -55,8 +55,8 @@ def _mime(filename: str) -> str:
 async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg") -> Optional[str]:
     """
     Transcribe audio bytes to text.
-    Tries Groq Whisper first; falls back to OpenAI Whisper.
-    Returns None if both unavailable or fail.
+    Priority: Groq whisper-large-v3-turbo (fast) → OpenAI gpt-4o-transcribe → gpt-4o-mini-transcribe.
+    Returns None if all providers unavailable or fail.
     """
     if settings.groq_api_key:
         text = await _call_whisper(
@@ -67,8 +67,14 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg") -> Optiona
         logger.warning("whisper_groq_failed_trying_openai")
 
     if settings.openai_api_key:
+        text = await _call_whisper(
+            _OPENAI_URL, settings.openai_api_key, audio_bytes, filename, "gpt-4o-transcribe"
+        )
+        if text is not None:
+            return text
+        logger.warning("whisper_gpt4o_transcribe_failed_trying_mini")
         return await _call_whisper(
-            _OPENAI_URL, settings.openai_api_key, audio_bytes, filename, "whisper-1"
+            _OPENAI_URL, settings.openai_api_key, audio_bytes, filename, "gpt-4o-mini-transcribe"
         )
 
     logger.error("whisper_no_provider", hint="Set GROQ_API_KEY or OPENAI_API_KEY")
