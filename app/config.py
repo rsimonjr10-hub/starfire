@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openai_api_key: str = ""
 
+    # Knowledge OS — embeddings model
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+
     class Config:
         env_file = ".env"
         case_sensitive = False

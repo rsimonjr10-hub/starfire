@@ -13,9 +13,16 @@ from app.routers import google_auth
 from app.routers import tickets as tickets_router
 from app.routers import dashboard as dashboard_router
 from app.routers import voice as voice_router
+from app.routers import knowledge as knowledge_router
+from app.routers import business_os as business_router
+from app.routers import life_os as life_router
+from app.routers import automations as automations_router
+from app.routers import briefing as briefing_router
+from app.routers import realtime as realtime_router
 from app.workers.market_worker import MarketWorker
 from app.workers.event_worker import EventWorker
 from app.workers.report_worker import ReportWorker
+from app.workers.automation_worker import AutomationWorker
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 structlog.configure(
@@ -33,6 +40,7 @@ logger = structlog.get_logger(__name__)
 market_worker = MarketWorker(interval_seconds=300)
 event_worker = EventWorker()
 report_worker = ReportWorker()
+automation_worker = AutomationWorker(interval_seconds=900)
 
 
 @asynccontextmanager
@@ -51,6 +59,7 @@ async def lifespan(app: FastAPI):
     market_task = asyncio.create_task(market_worker.start())
     event_task = asyncio.create_task(event_worker.start())
     report_task = asyncio.create_task(report_worker.start())
+    automation_task = asyncio.create_task(automation_worker.start())
     logger.info("background_workers_started")
 
     yield
@@ -59,9 +68,11 @@ async def lifespan(app: FastAPI):
     await market_worker.stop()
     await event_worker.stop()
     await report_worker.stop()
+    await automation_worker.stop()
     market_task.cancel()
     event_task.cancel()
     report_task.cancel()
+    automation_task.cancel()
     # Shut down telegram application cleanly
     try:
         from app.telegram.bot import get_application
@@ -113,6 +124,12 @@ app.include_router(google_auth.router)
 app.include_router(tickets_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(voice_router.router)
+app.include_router(knowledge_router.router)
+app.include_router(business_router.router)
+app.include_router(life_router.router)
+app.include_router(automations_router.router)
+app.include_router(briefing_router.router)
+app.include_router(realtime_router.router)
 
 
 @app.get("/")

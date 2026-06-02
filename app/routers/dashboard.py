@@ -9,12 +9,14 @@ Users get their personal URL from STARFIRE via /mylink.
 
 import hashlib
 import hmac
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func as sqlfunc
+from sqlalchemy.sql.expression import extract
 
 from app.config import settings
 from app.database import AsyncSessionLocal
@@ -23,6 +25,7 @@ from app.models.memory import UserMemory
 from app.models.task import Task
 from app.models.goal import Goal
 from app.models.ticket import BotTicket
+from app.models.spending import SpendingRecord
 from app.integrations.snaptrade import snaptrade
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -276,18 +279,19 @@ async def snaptrade_activities(user: User = Depends(_get_user)):
 
 @router.get("/api/data")
 async def dashboard_data(user: User = Depends(_get_user)):
-    """Core dashboard data: tasks, goals, tickets."""
+    """Core dashboard data: tasks, goals, tickets, spending summary."""
+    now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
         task_result = await session.execute(
             select(Task)
             .where(Task.user_id == user.id, Task.status == "PENDING")
             .order_by(Task.priority.desc())
-            .limit(10)
+            .limit(20)
         )
         tasks = task_result.scalars().all()
 
         goal_result = await session.execute(
-            select(Goal).where(Goal.user_id == user.id, Goal.status == "ACTIVE").limit(10)
+            select(Goal).where(Goal.user_id == user.id, Goal.status == "ACTIVE").limit(20)
         )
         goals = goal_result.scalars().all()
 
@@ -299,9 +303,29 @@ async def dashboard_data(user: User = Depends(_get_user)):
         )
         tickets = ticket_result.scalars().all()
 
+        # Spending this calendar month
+        spend_result = await session.execute(
+            select(SpendingRecord.category, sqlfunc.sum(SpendingRecord.amount).label("total"))
+            .where(
+                SpendingRecord.user_id == user.id,
+                extract("year", SpendingRecord.recorded_at) == now.year,
+                extract("month", SpendingRecord.recorded_at) == now.month,
+            )
+            .group_by(SpendingRecord.category)
+            .order_by(sqlfunc.sum(SpendingRecord.amount).desc())
+        )
+        spend_rows = spend_result.all()
+
+    spending_by_category = [
+        {"category": row.category, "total": float(row.total or 0)} for row in spend_rows
+    ]
+    spending_this_month = sum(r["total"] for r in spending_by_category)
+
     return {
         "user": {"name": user.first_name or user.username or "User"},
         "snaptrade_connected": bool(user.snaptrade_user_id and user.snaptrade_user_secret),
+        "spending_this_month": round(spending_this_month, 2),
+        "spending_by_category": spending_by_category,
         "tasks": [
             {
                 "id": t.id,
