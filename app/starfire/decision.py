@@ -410,13 +410,14 @@ class DecisionEngine:
                     has_data = True
 
                 if isinstance(orders, list) and orders:
-                    lines.append("\n*Today's Fills*")
+                    lines.append("\n*Recent Fills*")
                     for o in orders[:10]:
                         sym = o.get("symbol", "")
                         side = o.get("side", "").upper()
                         qty = o.get("filled_qty", o.get("qty", "?"))
                         price = float(o.get("filled_avg_price") or 0)
-                        lines.append(f"  `{sym}` {side} × {qty} @ ${price:.2f}")
+                        filled_at = (o.get("filled_at") or "")[:10]
+                        lines.append(f"  `{sym}` {side} × {qty} @ ${price:.2f} ({filled_at})")
                     has_data = True
 
             except Exception as e:

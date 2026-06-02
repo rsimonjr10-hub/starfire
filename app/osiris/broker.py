@@ -147,10 +147,11 @@ class AlpacaBroker:
             resp.raise_for_status()
             return resp.json()
 
-    async def get_recent_orders(self, limit: int = 20) -> list[dict]:
-        """Today's filled orders."""
-        from datetime import date
-        after = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    async def get_recent_orders(self, limit: int = 20, days_back: int = 5) -> list[dict]:
+        """Recent filled orders (default: last 5 days, covers weekends/overnight)."""
+        from datetime import timedelta
+        # Alpaca requires RFC3339 with 'Z', not Python's '+00:00'
+        after = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 f"{self.base_url}/v2/orders",
