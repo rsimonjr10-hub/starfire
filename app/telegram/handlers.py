@@ -963,6 +963,23 @@ class TelegramHandlers:
             parse_mode=ParseMode.MARKDOWN,
         )
 
+    async def cmd_mylink(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send the user their personal dashboard URL."""
+        from app.routers.dashboard import get_dashboard_url
+        user = await self._get_or_create_user(update)
+        url = get_dashboard_url(user.telegram_id)
+        await update.message.reply_text(
+            f"🔗 <b>Your STARFIRE Dashboard</b>\n\n"
+            f"<a href=\"{url}\">{url}</a>\n\n"
+            f"<i>This link is personal — don't share it. It gives full access to your memory, tasks, and OSIRIS data.</i>",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+    async def cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """List stored memories via the brain."""
+        await self._run_brain(update, "list my memories")
+
     async def _run_brain(self, update: Update, text: str) -> None:
         """Route arbitrary text through STARFIRE brain and reply."""
         await update.message.chat.send_action("typing")

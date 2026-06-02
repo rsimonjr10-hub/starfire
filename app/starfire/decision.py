@@ -14,7 +14,7 @@ from app.starfire.prompts import (
     BILLS_CONTEXT_TEMPLATE,
     DATA_RESULT_TEMPLATE,
 )
-from app.models import User, PortfolioState, Task, Goal, Bill, BotTicket
+from app.models import User, PortfolioState, Task, Goal, Bill, BotTicket, UserMemory
 from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
@@ -114,6 +114,14 @@ class DecisionEngine:
         # ── GOOGLE ──────────────────────────────────────────────────────
         if action_type in GOOGLE_ACTIONS:
             return await self._handle_google_action(user, action, history, context)
+
+        # ── MEMORY ──────────────────────────────────────────────────────
+        if action_type == "REMEMBER":
+            return await self._remember(user, action)
+        if action_type == "FORGET":
+            return await self._forget(user, action)
+        if action_type == "LIST_MEMORIES":
+            return await self._list_memories(user, action)
 
         # ── INTERNAL TASKS / GOALS / SPENDING / BILLS ──────────────────
         if action_type == "CREATE_TASK":
@@ -1409,12 +1417,91 @@ class DecisionEngine:
         return "Budget updated:\n" + "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────────────────
+    # MEMORY
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _remember(self, user: User, action: dict) -> str:
+        content = action.get("content", "").strip()
+        if not content:
+            return "What should I remember? Tell me the fact or instruction."
+        category = action.get("category", "fact")
+        importance = int(action.get("importance", 5))
+        mem = UserMemory(
+            user_id=user.id,
+            category=category,
+            content=content,
+            importance=importance,
+        )
+        self.db.add(mem)
+        await self.db.flush()
+        icons = {"fact": "🧠", "preference": "⚙️", "instruction": "📌", "event": "📅"}
+        return f"{icons.get(category, '🧠')} Remembered: _{content}_"
+
+    async def _forget(self, user: User, action: dict) -> str:
+        memory_id = action.get("memory_id")
+        keyword = action.get("keyword", "")
+        if memory_id:
+            result = await self.db.execute(
+                select(UserMemory).where(UserMemory.id == memory_id, UserMemory.user_id == user.id)
+            )
+            mem = result.scalar_one_or_none()
+            if not mem:
+                return f"Memory #{memory_id} not found."
+            mem.is_active = False
+            return f"Forgotten: _{mem.content}_"
+        if keyword:
+            result = await self.db.execute(
+                select(UserMemory).where(
+                    UserMemory.user_id == user.id,
+                    UserMemory.is_active == True,
+                    UserMemory.content.ilike(f"%{keyword}%"),
+                )
+            )
+            mems = result.scalars().all()
+            for m in mems:
+                m.is_active = False
+            return f"Forgotten {len(mems)} memor{'ies' if len(mems) != 1 else 'y'} matching *{keyword}*." if mems else "No matching memories found."
+        return "Tell me what to forget — use a keyword or memory ID."
+
+    async def _list_memories(self, user: User, action: dict) -> str:
+        result = await self.db.execute(
+            select(UserMemory).where(UserMemory.user_id == user.id, UserMemory.is_active == True)
+            .order_by(UserMemory.importance.desc(), UserMemory.created_at)
+        )
+        mems = result.scalars().all()
+        if not mems:
+            return "No memories stored yet. Tell me something to remember and I'll keep it."
+        icons = {"fact": "🧠", "preference": "⚙️", "instruction": "📌", "event": "📅"}
+        cats: dict[str, list] = {}
+        for m in mems:
+            cats.setdefault(m.category, []).append(m)
+        lines = ["*STARFIRE Memory*\n"]
+        for cat, items in cats.items():
+            lines.append(f"*{cat.title()}s* {icons.get(cat, '🧠')}")
+            for m in items:
+                lines.append(f"  [{m.id}] {m.content}")
+        return "\n".join(lines)
+
+    # ─────────────────────────────────────────────────────────────────────
     # CONTEXT BUILDER
     # ─────────────────────────────────────────────────────────────────────
 
     async def _build_context(self, user: User) -> Optional[str]:
         parts = []
         now = datetime.now(timezone.utc)
+
+        # Persistent memories — injected first so brain always has them
+        mem_result = await self.db.execute(
+            select(UserMemory).where(UserMemory.user_id == user.id, UserMemory.is_active == True)
+            .order_by(UserMemory.importance.desc()).limit(40)
+        )
+        memories = mem_result.scalars().all()
+        if memories:
+            icons = {"fact": "🧠", "preference": "⚙️", "instruction": "📌", "event": "📅"}
+            mem_lines = ["## What STARFIRE Knows About You (persistent memory)"]
+            for m in memories:
+                mem_lines.append(f"- [{m.category}] {m.content}")
+            parts.append("\n".join(mem_lines))
 
         # Portfolio
         result = await self.db.execute(

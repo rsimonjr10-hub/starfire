@@ -7,6 +7,7 @@ from app.models.goal import Goal
 from app.models.bill import Bill
 from app.models.event_log import EventLog, ExecutionLog
 from app.models.ticket import BotTicket
+from app.models.memory import UserMemory
 
 __all__ = [
     "User",
@@ -19,4 +20,5 @@ __all__ = [
     "EventLog",
     "ExecutionLog",
     "BotTicket",
+    "UserMemory",
 ]

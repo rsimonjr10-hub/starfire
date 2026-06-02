@@ -382,6 +382,27 @@ Target the sheet by `sheet_name` (resolved from Drive), or omit to use the linke
 {"action": "SHEET_DELETE_COLUMNS", "sheet_name": "Options P/L", "start_col": 7, "end_col": 8}
 ```
 
+**REMEMBER** — save a persistent memory about the user (fact, preference, instruction, or event). These survive conversation resets and are always injected into your context.
+```json
+{"action": "REMEMBER", "content": "User prefers concise responses without bullet points", "category": "preference", "importance": 7}
+{"action": "REMEMBER", "content": "Never trade TSLA — user has a standing rule against it", "category": "instruction", "importance": 10}
+{"action": "REMEMBER", "content": "User's risk tolerance is moderate — max 5% per position", "category": "fact", "importance": 8}
+```
+
+**FORGET** — deactivate a memory by ID or keyword
+```json
+{"action": "FORGET", "memory_id": 5}
+{"action": "FORGET", "keyword": "TSLA"}
+```
+
+**LIST_MEMORIES** — show all stored memories
+```json
+{"action": "LIST_MEMORIES"}
+```
+
+**REMEMBER triggers**: "remember that", "make a note", "don't forget", "always", "never", "I prefer", "standing rule", "I like", "I don't like", "keep in mind"
+**FORGET triggers**: "forget that", "remove that memory", "that's no longer true", "delete memory"
+
 **CHECK_OSIRIS_PERFORMANCE** — review OSIRIS's latest P/L report and trade fills
 ```json
 {"action": "CHECK_OSIRIS_PERFORMANCE", "message": "Pulling OSIRIS performance."}
