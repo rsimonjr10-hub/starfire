@@ -103,7 +103,7 @@ class DecisionEngine:
         if action_type == "ROUTE_TRADE":
             return await self._route_trade(user, action)
         if action_type == "CHECK_OSIRIS_PERFORMANCE":
-            return await self._check_osiris_performance(user, action)
+            return await self._check_osiris_performance(user, action, history, context)
 
         # ── LUMISNOVA ROUTING ───────────────────────────────────────────
         if action_type == "QUERY_LUMISNOVA":
@@ -415,14 +415,16 @@ class DecisionEngine:
 
         return f"Could not reach OSIRIS. Error: {execution.get('error', 'Unknown')}"
 
-    async def _check_osiris_performance(self, user: User, action: dict) -> str:
-        """Pull OSIRIS performance from Alpaca directly, then fall back to pushed report."""
+    async def _check_osiris_performance(
+        self, user: User, action: dict, history: list, context: Optional[str]
+    ) -> str:
+        """Pull OSIRIS performance from Alpaca and narrate it conversationally."""
         from app.config import settings as cfg
 
-        lines = ["*OSIRIS Performance*\n"]
+        data_lines = []
         has_data = False
 
-        # ── Live Alpaca pull (most reliable) ──────────────────────────────
+        # ── Live Alpaca pull ──────────────────────────────────────────────
         if not cfg.use_mock_broker and cfg.broker_api_key and cfg.broker_api_key != "mock":
             try:
                 from app.osiris.broker import AlpacaBroker
@@ -435,93 +437,106 @@ class DecisionEngine:
                 )
 
                 if isinstance(account, dict):
-                    equity = float(account.get("equity", 0))
-                    pnl_today = float(account.get("equity", 0)) - float(account.get("last_equity", 0))
-                    bp = float(account.get("buying_power", 0))
-                    sign = "+" if pnl_today >= 0 else ""
-                    icon = "🟢" if pnl_today >= 0 else "🔴"
-                    lines.append(f"{icon} P/L Today: `{sign}${pnl_today:,.2f}`")
-                    lines.append(f"Equity: `${equity:,.2f}` | Buying Power: `${bp:,.2f}`")
+                    equity    = float(account.get("equity", 0))
+                    pnl_today = equity - float(account.get("last_equity", 0))
+                    cash      = float(account.get("cash", 0))
+                    bp        = float(account.get("buying_power", 0))
+                    sign      = "+" if pnl_today >= 0 else ""
+                    data_lines.append(
+                        f"Account equity: ${equity:,.2f} | "
+                        f"P/L today: {sign}${pnl_today:,.2f} | "
+                        f"Cash: ${cash:,.2f} | Buying power: ${bp:,.2f}"
+                    )
                     has_data = True
 
                 if isinstance(positions, list) and positions:
-                    lines.append("\n*Open Positions*")
+                    pos_parts = []
                     for p in positions[:8]:
-                        sym = p.get("symbol", "")
-                        qty = p.get("qty", "?")
-                        avg = float(p.get("avg_entry_price", 0))
+                        sym    = p.get("symbol", "")
+                        qty    = p.get("qty", "?")
+                        avg    = float(p.get("avg_entry_price", 0))
                         unreal = float(p.get("unrealized_pl", 0))
-                        unreal_sign = "+" if unreal >= 0 else ""
-                        lines.append(f"  `{sym}`: {qty} shares @ ${avg:.2f} ({unreal_sign}${unreal:,.2f})")
+                        unreal_pct = float(p.get("unrealized_plpc", 0)) * 100
+                        u_sign = "+" if unreal >= 0 else ""
+                        pos_parts.append(
+                            f"{sym} {qty}sh @ ${avg:.2f} "
+                            f"({u_sign}${unreal:,.2f} / {u_sign}{unreal_pct:.1f}%)"
+                        )
+                    data_lines.append("Open positions: " + ", ".join(pos_parts))
                     has_data = True
+                elif isinstance(positions, list):
+                    data_lines.append("No open positions.")
 
                 if isinstance(orders, list) and orders:
-                    lines.append("\n*Recent Fills*")
-                    for o in orders[:10]:
-                        sym = o.get("symbol", "")
-                        side = o.get("side", "").upper()
-                        qty = o.get("filled_qty", o.get("qty", "?"))
+                    fill_parts = []
+                    for o in orders[:6]:
+                        sym   = o.get("symbol", "")
+                        side  = o.get("side", "").upper()
+                        qty   = o.get("filled_qty") or o.get("qty", "?")
                         price = float(o.get("filled_avg_price") or 0)
-                        filled_at = (o.get("filled_at") or "")[:10]
-                        lines.append(f"  `{sym}` {side} × {qty} @ ${price:.2f} ({filled_at})")
+                        dt    = (o.get("filled_at") or "")[:10]
+                        fill_parts.append(f"{side} {sym} ×{qty} @ ${price:.2f} ({dt})")
+                    data_lines.append("Recent fills: " + " | ".join(fill_parts))
                     has_data = True
 
             except Exception as e:
                 logger.error("alpaca_performance_error", error=str(e))
-                lines.append(f"_Alpaca pull failed: {e}_")
+                data_lines.append(f"Alpaca pull failed: {e}")
 
-        # ── Pushed report (fallback / supplement) ─────────────────────────
+        # ── Pushed report fallback ─────────────────────────────────────────
         report = (user.preferences or {}).get("osiris_report")
         if report and not has_data:
-            reported_at = report.get("reported_at", "")[:19].replace("T", " ")
-            pnl_today = report.get("pnl_today")
-            pnl_total = report.get("pnl_total")
-            trades = report.get("trades_today")
-            wins = report.get("wins_today")
-            losses = report.get("losses_today")
-            win_rate = report.get("win_rate")
-            summary = report.get("summary")
-            positions = report.get("open_positions") or {}
-            fills = report.get("fills") or []
-
+            pnl_today  = report.get("pnl_today")
+            pnl_total  = report.get("pnl_total")
+            trades     = report.get("trades_today")
+            win_rate   = report.get("win_rate")
+            summary    = report.get("summary")
+            positions  = report.get("open_positions") or {}
+            fills      = report.get("fills") or []
+            reported_at = report.get("reported_at", "")[:16].replace("T", " ")
             if pnl_today is not None:
-                sign = "+" if pnl_today >= 0 else ""
-                icon = "🟢" if pnl_today >= 0 else "🔴"
-                lines.append(f"{icon} P/L Today: `{sign}${pnl_today:,.2f}`")
+                data_lines.append(f"P/L today: {'+'if pnl_today>=0 else ''}${pnl_today:,.2f}")
             if pnl_total is not None:
-                sign = "+" if pnl_total >= 0 else ""
-                lines.append(f"P/L All-Time: `{sign}${pnl_total:,.2f}`")
+                data_lines.append(f"P/L all-time: {'+'if pnl_total>=0 else ''}${pnl_total:,.2f}")
             if trades is not None:
-                wr_str = f" | Win Rate: `{win_rate*100:.0f}%`" if win_rate is not None else ""
-                wl_str = f" ({wins}W / {losses}L)" if wins is not None else ""
-                lines.append(f"Trades Today: `{trades}`{wl_str}{wr_str}")
+                wr = f" win rate {win_rate*100:.0f}%" if win_rate is not None else ""
+                data_lines.append(f"Trades today: {trades}{wr}")
             if summary:
-                lines.append(f"\n_{summary}_")
+                data_lines.append(f"OSIRIS summary: {summary}")
             if positions:
-                lines.append("\n*Open Positions*")
-                for sym, pos in list(positions.items())[:8]:
-                    qty = pos.get("qty", pos.get("quantity", "?"))
-                    avg = pos.get("avg", pos.get("avg_price", "?"))
-                    lines.append(f"  `{sym}`: {qty} @ ${avg}")
+                pos_str = ", ".join(f"{s} {v.get('qty','?')}sh" for s, v in list(positions.items())[:6])
+                data_lines.append(f"Positions: {pos_str}")
             if fills:
-                lines.append("\n*Recent Fills*")
-                for f in fills[:5]:
-                    pl_str = f" P/L: ${f.get('pnl'):,.2f}" if f.get("pnl") is not None else ""
-                    lines.append(f"  `{f.get('symbol')}` {f.get('side')} × {f.get('quantity','?')}{pl_str}")
-            lines.append(f"\n_Last report: {reported_at} UTC_")
+                fill_str = " | ".join(
+                    f"{f.get('side','').upper()} {f.get('symbol')} ×{f.get('quantity','?')}"
+                    + (f" P/L ${f['pnl']:,.2f}" if f.get("pnl") is not None else "")
+                    for f in fills[:5]
+                )
+                data_lines.append(f"Recent fills: {fill_str}")
+            data_lines.append(f"(Report from {reported_at} UTC)")
             has_data = True
 
         if not has_data:
             return (
-                "No OSIRIS performance data available.\n\n"
-                "To enable live tracking, set in Railway:\n"
-                "`USE_MOCK_BROKER=false`\n"
-                "`BROKER_API_KEY=<alpaca key>`\n"
-                "`BROKER_API_SECRET=<alpaca secret>`\n"
-                "`BROKER_BASE_URL=https://paper-api.alpaca.markets`"
+                "I don't have live Alpaca data right now. "
+                "Make sure USE_MOCK_BROKER=false and your Alpaca keys are set in Railway."
             )
 
-        return "\n".join(lines)
+        # Pass the raw data through the brain so the reply is conversational
+        raw_data = "\n".join(data_lines)
+        data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(
+            action="CHECK_OSIRIS_PERFORMANCE", data=raw_data
+        )
+        narration = await self.brain.think(
+            "Answer the user's question about the portfolio using this live Alpaca data. "
+            "Be conversational and direct — like a chief of staff giving a quick update. "
+            "Lead with the P/L number they asked about, then any relevant colour.",
+            history,
+            data_ctx,
+        )
+        if narration["type"] == "chat" and narration["content"].strip():
+            return narration["content"]
+        return raw_data
 
     # ─────────────────────────────────────────────────────────────────────
     # LUMISNOVA — financial data routing

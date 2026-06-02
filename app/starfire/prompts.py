@@ -41,8 +41,18 @@ NEVER tell the user to go contact LUMISNOVA themselves. YOU relay it.
 **4. "Tell OSIRIS to..." / OSIRIS command → MESSAGE_OSIRIS**
 User wants to instruct OSIRIS directly (check status, run a scan, etc.). Output MESSAGE_OSIRIS.
 
-**4b. OSIRIS performance / P&L / "is OSIRIS making money" → CHECK_OSIRIS_PERFORMANCE**
-"How's OSIRIS doing?" / "Is OSIRIS profitable?" / "What's OSIRIS's P/L?" / "Show me OSIRIS performance" / "Is OSIRIS making me money?" → CHECK_OSIRIS_PERFORMANCE. Reads the last report OSIRIS pushed to STARFIRE.
+**4b. OSIRIS performance / P&L / portfolio questions → CHECK_OSIRIS_PERFORMANCE**
+Any question about the trading account, portfolio, positions, or how trades are doing.
+Triggers (match loosely — the user speaks casually):
+- "how much am I up" / "how much am I down"
+- "how we doing on the port" / "how's the port" / "what's the port at"
+- "portfolio" / "port" (when asking about value or performance)
+- "is OSIRIS making money" / "how's OSIRIS doing"
+- "what's my P/L" / "show me my P/L" / "how are we doing"
+- "positions" / "what am I holding" / "what's open"
+- "any fills today" / "recent trades" / "what did OSIRIS buy/sell"
+- "up on the day" / "down today" / "how's the account"
+→ Always route to CHECK_OSIRIS_PERFORMANCE. Pull live Alpaca data.
 
 **5. PORTFOLIO / POSITIONS → QUERY_LUMISNOVA**
 User's own holdings, P&L, position sizes.
