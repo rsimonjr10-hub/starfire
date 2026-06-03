@@ -785,29 +785,52 @@ class DecisionEngine:
     # GOOGLE
     # ─────────────────────────────────────────────────────────────────────
 
-    def _get_google_services(self, user: User):
-        if not user.google_token_json:
-            raise RuntimeError("Google not connected. Use /connect_google to link your account.")
-        from app.integrations.gmail_service import GmailService, DriveService
-        return GmailService(user.google_token_json), DriveService(user.google_token_json)
-
-    def _google_connected(self, user: User) -> bool:
-        return bool(user.google_token_json)
-
-    def _calendar(self, user: User):
-        from app.integrations.gmail_service import CalendarService
-        return CalendarService(user.google_token_json)
-
-    def _sheets(self, user: User):
-        from app.integrations.gmail_service import SheetsService
-        return SheetsService(user.google_token_json)
+    @staticmethod
+    def _is_google_auth_error(e: Exception) -> bool:
+        name = type(e).__name__
+        msg = str(e).lower()
+        return (
+            "RefreshError" in name
+            or "invalid_grant" in msg
+            or "token has been expired" in msg
+            or "Token has been revoked" in msg
+        )
 
     async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str], attachments: Optional[list] = None) -> str:
-        action_type = action.get("action")
+        if not user.google_token_json:
+            return "Google not connected. Use /connect_google to link your account."
+
+        from app.integrations.gmail_service import GmailService, DriveService, CalendarService, SheetsService
         try:
-            gmail, drive = self._get_google_services(user)
-        except RuntimeError as e:
-            return str(e)
+            gmail = GmailService(user.google_token_json)
+            drive = DriveService(user.google_token_json)
+            cal = CalendarService(user.google_token_json)
+            sheets_svc = SheetsService(user.google_token_json)
+        except Exception as e:
+            if self._is_google_auth_error(e):
+                return "Google authorization expired or was revoked. Reconnect with /connect_google."
+            logger.error("google_init_error", error=str(e))
+            return f"Google connection error: {e}"
+
+        try:
+            result = await self._dispatch_google(user, action, history, context, gmail, drive, cal, sheets_svc, attachments)
+        except Exception as e:
+            if self._is_google_auth_error(e):
+                return "Google authorization expired or was revoked. Reconnect with /connect_google."
+            logger.error("google_action_error", action=action.get("action"), error=str(e))
+            return f"Google error: {e}"
+
+        # Persist refreshed token if any service auto-refreshed it
+        for svc in (gmail, drive, cal, sheets_svc):
+            if svc.current_token_json != user.google_token_json:
+                user.google_token_json = svc.current_token_json
+                logger.info("google_token_refreshed_and_saved", user_id=user.id)
+                break
+
+        return result
+
+    async def _dispatch_google(self, user: User, action: dict, history: list, context: Optional[str], gmail, drive, cal, sheets_svc, attachments: Optional[list] = None) -> str:
+        action_type = action.get("action")
 
         try:
             if action_type == "GET_EMAILS":
@@ -967,15 +990,15 @@ class DecisionEngine:
                 return f"Document created: [{action.get('title','')}]({link})" if link else "Failed to create document."
 
         except Exception as e:
+            if self._is_google_auth_error(e):
+                raise
             logger.error("google_action_error", action=action_type, error=str(e))
             return f"Google error: {e}"
 
         # Calendar actions
         if action_type == "GET_CALENDAR":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             try:
-                events = self._calendar(user).list_upcoming(int(action.get("limit", 10)))
+                events = cal.list_upcoming(int(action.get("limit", 10)))
                 if not events:
                     return "No upcoming calendar events."
                 lines = ["*Upcoming Events*\n"]
@@ -989,8 +1012,6 @@ class DecisionEngine:
                 return f"Calendar error: {e}"
 
         if action_type in ("CREATE_EVENT", "CREATE_APPOINTMENT"):
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             title = action.get("title", "")
             start = action.get("start", "")
             if not title or not start:
@@ -1003,7 +1024,7 @@ class DecisionEngine:
                 if isinstance(reminders, int):
                     reminders = [reminders]
 
-                event = self._calendar(user).create_event(
+                event = cal.create_event(
                     title=title,
                     start=start,
                     end=action.get("end"),
@@ -1035,8 +1056,6 @@ class DecisionEngine:
                 return f"Calendar error: {e}"
 
         if action_type == "UPDATE_EVENT":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             event_id = action.get("event_id", "")
             if not event_id:
                 return "Need the event ID to update. Search for it with 'find [event name]'."
@@ -1044,7 +1063,7 @@ class DecisionEngine:
                 attendees = action.get("attendees")
                 if isinstance(attendees, str):
                     attendees = [a.strip() for a in attendees.split(",") if a.strip()]
-                event = self._calendar(user).update_event(
+                event = cal.update_event(
                     event_id=event_id,
                     title=action.get("title"),
                     start=action.get("start"),
@@ -1059,25 +1078,21 @@ class DecisionEngine:
                 return f"Calendar error: {e}"
 
         if action_type == "DELETE_EVENT":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             event_id = action.get("event_id", "")
             if not event_id:
                 return "Need the event ID to delete."
             try:
-                ok = self._calendar(user).delete_event(event_id)
+                ok = cal.delete_event(event_id)
                 return "Event cancelled and attendees notified ✓" if ok else "Failed to delete event."
             except Exception as e:
                 return f"Calendar error: {e}"
 
         if action_type == "SEARCH_CALENDAR":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             query = action.get("query", "")
             if not query:
                 return "What should I search for in your calendar?"
             try:
-                events = self._calendar(user).search_events(query, int(action.get("limit", 10)))
+                events = cal.search_events(query, int(action.get("limit", 10)))
                 if not events:
                     return f"No calendar events found matching '{query}'."
                 lines = [f"*Calendar: {query}*\n"]
@@ -1092,10 +1107,8 @@ class DecisionEngine:
 
         # Sheets — options P/L tracking
         if action_type in ("UPDATE_SHEET", "GET_SHEET_PL"):
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
 
-            sheets = self._sheets(user)
+            sheets = sheets_svc
             tab = action.get("tab")
 
             # Resolve the target spreadsheet: explicit id > name lookup > saved default
@@ -1160,13 +1173,11 @@ class DecisionEngine:
 
         # CREATE_SHEET — make a new spreadsheet
         if action_type == "CREATE_SHEET":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
             title = action.get("title") or action.get("name", "")
             if not title:
                 return "What should I name the new sheet?"
             try:
-                sheets = self._sheets(user)
+                sheets = sheets_svc
                 result = sheets.create_spreadsheet(
                     title=title,
                     tab=action.get("tab"),
@@ -1193,9 +1204,7 @@ class DecisionEngine:
 
         # DELETE_SHEET_ROW — remove matching P/L rows
         if action_type == "DELETE_SHEET_ROW":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
-            sheets = self._sheets(user)
+            sheets = sheets_svc
             sheet_id = action.get("sheet_id")
             if not sheet_id and action.get("sheet_name"):
                 sheet_id = sheets.find_spreadsheet_by_name(action["sheet_name"])
@@ -1222,9 +1231,7 @@ class DecisionEngine:
 
         # DELETE_SHEET — trash an entire spreadsheet
         if action_type == "DELETE_SHEET":
-            if not self._google_connected(user):
-                return "Google not connected. Use /connect_google."
-            sheets = self._sheets(user)
+            sheets = sheets_svc
             sheet_id = action.get("sheet_id")
             sheet_name = action.get("sheet_name")
             if not sheet_id and sheet_name:
@@ -1255,26 +1262,23 @@ class DecisionEngine:
             "SHEET_DELETE_COLUMNS", "SHEET_ADD_TAB", "SHEET_RENAME_TAB",
             "SHEET_FREEZE", "SHEET_AUTO_RESIZE", "SHEET_CONDITIONAL_FORMAT",
         }:
-            return await self._sheets_op(user, action, action_type)
+            return await self._sheets_op(sheets_svc, user, action, action_type)
 
         return "Done."
 
-    async def _resolve_sheet(self, user: User, action: dict):
-        """Resolve spreadsheet ID from action. Returns (sheets, sheet_id) or raises."""
-        sheets = self._sheets(user)
+    async def _resolve_sheet(self, sheets_svc, action: dict, user: User):
+        """Resolve spreadsheet ID from action. Returns (sheets_svc, sheet_id)."""
         sheet_id = action.get("sheet_id")
         if not sheet_id and action.get("sheet_name"):
-            sheet_id = sheets.find_spreadsheet_by_name(action["sheet_name"])
+            sheet_id = sheets_svc.find_spreadsheet_by_name(action["sheet_name"])
             if not sheet_id:
-                return sheets, None
+                return sheets_svc, None
         sheet_id = sheet_id or (user.preferences or {}).get("options_sheet_id")
-        return sheets, sheet_id
+        return sheets_svc, sheet_id
 
-    async def _sheets_op(self, user: User, action: dict, action_type: str) -> str:
-        if not self._google_connected(user):
-            return "Google not connected. Use /connect_google."
+    async def _sheets_op(self, sheets_svc, user: User, action: dict, action_type: str) -> str:
         try:
-            sheets, sheet_id = await self._resolve_sheet(user, action)
+            sheets, sheet_id = await self._resolve_sheet(sheets_svc, action, user)
             if not sheet_id:
                 name = action.get("sheet_name", "")
                 return (

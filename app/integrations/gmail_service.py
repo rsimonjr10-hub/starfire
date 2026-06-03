@@ -21,7 +21,8 @@ SCOPES = [
 ]
 
 
-def _build_credentials(token_json: str):
+def _maybe_refresh(token_json: str):
+    """Build credentials, refresh if expired. Returns (creds, current_token_json)."""
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
@@ -36,36 +37,49 @@ def _build_credentials(token_json: str):
     )
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
+        token_json = json.dumps({
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": list(creds.scopes or SCOPES),
+        })
+    return creds, token_json
+
+
+def _build_credentials(token_json: str):
+    creds, _ = _maybe_refresh(token_json)
     return creds
 
 
 def get_gmail_service(token_json: str):
     from googleapiclient.discovery import build
-    creds = _build_credentials(token_json)
+    creds, _ = _maybe_refresh(token_json)
     return build("gmail", "v1", credentials=creds)
 
 
 def get_drive_service(token_json: str):
     from googleapiclient.discovery import build
-    creds = _build_credentials(token_json)
+    creds, _ = _maybe_refresh(token_json)
     return build("drive", "v3", credentials=creds)
 
 
 def get_docs_service(token_json: str):
     from googleapiclient.discovery import build
-    creds = _build_credentials(token_json)
+    creds, _ = _maybe_refresh(token_json)
     return build("docs", "v1", credentials=creds)
 
 
 def get_calendar_service(token_json: str):
     from googleapiclient.discovery import build
-    creds = _build_credentials(token_json)
+    creds, _ = _maybe_refresh(token_json)
     return build("calendar", "v3", credentials=creds)
 
 
 def get_sheets_service(token_json: str):
     from googleapiclient.discovery import build
-    creds = _build_credentials(token_json)
+    creds, _ = _maybe_refresh(token_json)
     return build("sheets", "v4", credentials=creds)
 
 
@@ -93,8 +107,9 @@ def _header(headers: list, name: str) -> str:
 
 class GmailService:
     def __init__(self, token_json: str):
-        self._token_json = token_json
-        self._svc = get_gmail_service(token_json)
+        from googleapiclient.discovery import build
+        creds, self.current_token_json = _maybe_refresh(token_json)
+        self._svc = build("gmail", "v1", credentials=creds)
 
     # ── LISTING / SEARCHING ────────────────────────────────────────────────
 
@@ -369,8 +384,10 @@ class GmailService:
 
 class DriveService:
     def __init__(self, token_json: str):
-        self._svc = get_drive_service(token_json)
-        self._docs_svc = get_docs_service(token_json)
+        from googleapiclient.discovery import build
+        creds, self.current_token_json = _maybe_refresh(token_json)
+        self._svc = build("drive", "v3", credentials=creds)
+        self._docs_svc = build("docs", "v1", credentials=creds)
 
     def list_recent(self, max_results: int = 10) -> list[dict]:
         try:
@@ -428,10 +445,12 @@ class DriveService:
 
 class CalendarService:
     def __init__(self, token_json: str):
-        self._token_json = token_json
+        from googleapiclient.discovery import build
+        creds, self.current_token_json = _maybe_refresh(token_json)
+        self._cal = build("calendar", "v3", credentials=creds)
 
     def _svc(self):
-        return get_calendar_service(self._token_json)
+        return self._cal
 
     @staticmethod
     def _time_block(dt_str: str, tz: str, all_day: bool = False) -> dict:
@@ -573,15 +592,16 @@ class CalendarService:
 
 
 class SheetsService:
-    # Expected columns: Date | Symbol | Type | Entry | Exit | Contracts | P/L | Notes
     HEADERS = ["Date", "Symbol", "Type", "Entry", "Exit", "Contracts", "P/L", "Notes"]
     DEFAULT_TAB = "Sheet1"
 
     def __init__(self, token_json: str):
-        self._token_json = token_json
+        from googleapiclient.discovery import build
+        creds, self.current_token_json = _maybe_refresh(token_json)
+        self._sheets = build("sheets", "v4", credentials=creds)
 
     def _svc(self):
-        return get_sheets_service(self._token_json)
+        return self._sheets
 
     @staticmethod
     def _range(tab: Optional[str]) -> str:

@@ -108,8 +108,80 @@ async def google_auth_callback(request: Request, code: str = None, state: str = 
 
     logger.info("google_oauth_success", telegram_id=telegram_id)
     return HTMLResponse(
-        "<h2>Google connected!</h2>"
-        "<p>Your Gmail and Drive are now linked to STARFIRE.</p>"
-        "<p>You can close this tab and return to Telegram.</p>"
-        "<style>body{font-family:sans-serif;max-width:500px;margin:80px auto;text-align:center;}</style>",
+        """<!DOCTYPE html><html><head><title>STARFIRE — Google Connected</title>
+        <style>
+          body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+               background:#000;color:#fff;display:flex;align-items:center;
+               justify-content:center;min-height:100vh;margin:0;}
+          .card{background:#111;border:1px solid #e63946;border-radius:12px;
+                padding:40px;max-width:420px;text-align:center;}
+          h2{color:#e63946;margin:0 0 12px;}
+          p{color:#aaa;margin:8px 0;}
+          .badge{background:#e63946;color:#fff;border-radius:6px;
+                 padding:4px 12px;font-size:13px;display:inline-block;margin-top:16px;}
+        </style></head><body>
+        <div class="card">
+          <h2>✓ Google Connected</h2>
+          <p>Gmail, Drive, Calendar, and Sheets are now linked to STARFIRE.</p>
+          <p>You can close this tab and return to Telegram.</p>
+          <span class="badge">STARFIRE AI OS</span>
+        </div></body></html>""",
+    )
+
+
+@router.get("/status")
+async def google_auth_status(telegram_id: str):
+    """Check if a user has Google connected."""
+    try:
+        tid = int(telegram_id)
+    except ValueError:
+        return {"connected": False, "error": "invalid telegram_id"}
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tid))
+        user = result.scalar_one_or_none()
+    if not user:
+        return {"connected": False, "error": "user not found"}
+    if not user.google_token_json:
+        return {"connected": False}
+    try:
+        data = json.loads(user.google_token_json)
+        return {
+            "connected": True,
+            "has_refresh_token": bool(data.get("refresh_token")),
+            "scopes": data.get("scopes", []),
+        }
+    except Exception:
+        return {"connected": False, "error": "malformed token"}
+
+
+@router.get("/disconnect")
+async def google_auth_disconnect(telegram_id: str):
+    """Remove stored Google credentials for a user."""
+    try:
+        tid = int(telegram_id)
+    except ValueError:
+        return HTMLResponse("<h2>Invalid telegram_id.</h2>", status_code=400)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tid))
+        user = result.scalar_one_or_none()
+        if not user:
+            return HTMLResponse("<h2>User not found.</h2>", status_code=404)
+        user.google_token_json = None
+        await session.commit()
+    logger.info("google_oauth_disconnected", telegram_id=tid)
+    return HTMLResponse(
+        """<!DOCTYPE html><html><head><title>STARFIRE — Disconnected</title>
+        <style>
+          body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+               background:#000;color:#fff;display:flex;align-items:center;
+               justify-content:center;min-height:100vh;margin:0;}
+          .card{background:#111;border:1px solid #555;border-radius:12px;
+                padding:40px;max-width:420px;text-align:center;}
+          h2{color:#aaa;margin:0 0 12px;}p{color:#666;}
+        </style></head><body>
+        <div class="card">
+          <h2>Google Disconnected</h2>
+          <p>Your Google credentials have been removed from STARFIRE.</p>
+          <p>Use /connect_google in Telegram to reconnect.</p>
+        </div></body></html>"""
     )
