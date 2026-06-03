@@ -8,14 +8,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root {
-  --bg:      #080c14;
-  --bg1:     #0d1117;
-  --bg2:     #111827;
-  --bg3:     #1a2233;
-  --border:  rgba(255,255,255,.08);
-  --border2: rgba(255,255,255,.14);
-  --primary: #38bdf8;
-  --primary-dim: rgba(56,189,248,.1);
+  --bg:      #000000;
+  --bg1:     #080808;
+  --bg2:     #0d0d0d;
+  --bg3:     #141414;
+  --border:  rgba(255,255,255,.07);
+  --border2: rgba(255,255,255,.12);
+  --primary: #e63946;
+  --primary-dim: rgba(230,57,70,.1);
   --success: #22c55e;
   --warning: #f59e0b;
   --danger:  #ef4444;
@@ -59,7 +59,7 @@ body {
 }
 .logo-mark {
   width: 32px; height: 32px;
-  background: linear-gradient(135deg, #38bdf8, #8b5cf6);
+  background: linear-gradient(135deg, #e63946, #8b5cf6);
   border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   font-size: 16px;
@@ -104,7 +104,7 @@ body {
 }
 .avatar {
   width: 32px; height: 32px; border-radius: 50%;
-  background: linear-gradient(135deg, #38bdf8, #8b5cf6);
+  background: linear-gradient(135deg, #e63946, #8b5cf6);
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 13px; flex-shrink: 0;
 }
@@ -161,7 +161,7 @@ body {
 .goal-item { margin-bottom: 16px; }
 .goal-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
 .progress { height: 6px; background: var(--bg3); border-radius: 20px; overflow: hidden; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, var(--success), #38bdf8); border-radius: 20px; transition: width .6s ease; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--success), #e63946); border-radius: 20px; transition: width .6s ease; }
 .progress-fill.warn { background: linear-gradient(90deg, var(--warning), #fb923c); }
 .progress-fill.low  { background: linear-gradient(90deg, var(--danger), #f97316); }
 
@@ -208,7 +208,7 @@ textarea.input { resize: vertical; min-height: 80px; }
 .btn:hover:not(:disabled) { opacity: .85; }
 .btn:active:not(:disabled) { transform: scale(.98); }
 .btn:disabled { opacity: .4; cursor: default; }
-.btn-primary { background: var(--primary); color: #0a1628; }
+.btn-primary { background: var(--primary); color: #fff; }
 .btn-outline  { background: transparent; border: 1px solid var(--border2); color: var(--text); }
 .btn-success  { background: var(--success); color: #031a0c; }
 .btn-sm  { padding: 6px 12px; font-size: 12px; }
@@ -846,7 +846,7 @@ function renderChart() {
       type: 'doughnut',
       data: {
         labels: cats.map(c => c.category),
-        datasets: [{ data: cats.map(c=>c.total), backgroundColor:['#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#ec4899','#14b8a6'], borderWidth:0 }],
+        datasets: [{ data: cats.map(c=>c.total), backgroundColor:['#e63946','#22c55e','#f59e0b','#ef4444','#a78bfa','#ec4899','#14b8a6'], borderWidth:0 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -861,7 +861,7 @@ function renderChart() {
       type: 'bar',
       data: {
         labels: goals.map(g => g.title.length>20 ? g.title.slice(0,20)+'…' : g.title),
-        datasets: [{ label:'% complete', data:pcts, backgroundColor:pcts.map(p=>p>=80?'#22c55e':p>=50?'#38bdf8':'#f59e0b'), borderRadius:6 }],
+        datasets: [{ label:'% complete', data:pcts, backgroundColor:pcts.map(p=>p>=80?'#22c55e':p>=50?'#e63946':'#f59e0b'), borderRadius:6 }],
       },
       options: {
         indexAxis:'y', responsive:true, maintainAspectRatio:false,
