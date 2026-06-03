@@ -3,6 +3,8 @@ import base64
 import structlog
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
@@ -169,9 +171,10 @@ class GmailService:
         reply_to_thread: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         in_reply_to_subject: Optional[str] = None,
+        attachments: Optional[list] = None,
     ) -> tuple[MIMEMultipart, dict]:
         """Build a MIME message and return (mime_obj, send_body)."""
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed" if attachments else "alternative")
         msg["To"] = to
         msg["Subject"] = subject
         if cc:
@@ -182,6 +185,15 @@ class GmailService:
             msg["In-Reply-To"] = reply_to_message_id
             msg["References"] = reply_to_message_id
         msg.attach(MIMEText(body, "plain"))
+        if attachments:
+            for att in attachments:
+                mime_type = att.get("mime_type", "application/octet-stream")
+                maintype, subtype = (mime_type.split("/", 1) + ["octet-stream"])[:2]
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(att["bytes"])
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment", filename=att["filename"])
+                msg.attach(part)
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         send_body: dict = {"raw": raw}
         if reply_to_thread:
@@ -197,10 +209,11 @@ class GmailService:
         bcc: Optional[str] = None,
         reply_to_thread: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
+        attachments: Optional[list] = None,
     ) -> Optional[str]:
         """Send an email. Returns the message ID on success, None on failure."""
         try:
-            _, send_body = self._build_mime(to, subject, body, cc, bcc, reply_to_thread, reply_to_message_id)
+            _, send_body = self._build_mime(to, subject, body, cc, bcc, reply_to_thread, reply_to_message_id, attachments=attachments)
             result = self._svc.users().messages().send(userId="me", body=send_body).execute()
             return result.get("id")
         except Exception as e:

@@ -62,7 +62,7 @@ class DecisionEngine:
         self.osiris = OsirisExecutor(db)
         self.publisher = EventPublisher()
 
-    async def process_message(self, user: User, message: str) -> str:
+    async def process_message(self, user: User, message: str, attachments: Optional[list] = None) -> str:
         context = await self._build_context(user)
         history = user.conversation_history or []
 
@@ -71,13 +71,13 @@ class DecisionEngine:
         if result["type"] == "chat":
             reply = result["content"]
         else:
-            reply = await self._handle_action(user, result["content"], history, context)
+            reply = await self._handle_action(user, result["content"], history, context, attachments=attachments)
 
         updated_history = self.brain.append_to_history(history, message, result["raw"])
         user.conversation_history = updated_history[-40:]
         return reply
 
-    async def _handle_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
+    async def _handle_action(self, user: User, action: dict, history: list, context: Optional[str], attachments: Optional[list] = None) -> str:
         action_type = action.get("action", "IGNORE")
 
         if action_type == "IGNORE":
@@ -779,12 +779,13 @@ class DecisionEngine:
                 body = action.get("body", "")
                 if not to or not subject or not body:
                     return "Missing to/subject/body."
-                logger.info("send_email_attempt", to=to, subject=subject)
+                logger.info("send_email_attempt", to=to, subject=subject, has_attachments=bool(attachments))
                 message_id = gmail.send_email(
                     to=to, subject=subject, body=body,
                     cc=action.get("cc"), bcc=action.get("bcc"),
                     reply_to_thread=action.get("reply_to_thread"),
                     reply_to_message_id=action.get("reply_to_message_id"),
+                    attachments=attachments or [],
                 )
                 logger.info("send_email_result", message_id=message_id)
                 if not message_id:
@@ -792,12 +793,13 @@ class DecisionEngine:
                 confirmed = gmail.verify_sent(message_id)
                 logger.info("send_email_verify", message_id=message_id, confirmed=confirmed)
                 cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
+                att_note = f"\nAttachments: {len(attachments)} file(s)" if attachments else ""
                 if confirmed:
                     return (
                         f"✅ Sent and verified — confirmed in your Gmail sent folder.\n"
                         f"To: *{to}*{cc_str}\n"
                         f"Subject: _{subject}_\n"
-                        f"Message ID: `{message_id}`"
+                        f"Message ID: `{message_id}`{att_note}"
                     )
                 return (
                     f"⚠️ Email was submitted to Gmail (ID: `{message_id}`) but I could not verify it in your sent folder. "

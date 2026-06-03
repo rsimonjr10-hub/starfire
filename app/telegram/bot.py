@@ -71,6 +71,10 @@ async def get_application() -> Application:
             MessageHandler(filters.VOICE | filters.AUDIO, h.handle_voice)
         )
 
+        # Photos and documents → queue as email attachments
+        _application.add_handler(MessageHandler(filters.PHOTO, h.handle_photo))
+        _application.add_handler(MessageHandler(filters.Document.ALL, h.handle_document))
+
         # Catch-all natural language → STARFIRE brain
         _application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, h.handle_message)

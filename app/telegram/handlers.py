@@ -1115,9 +1115,14 @@ class TelegramHandlers:
 
         await self._safe_reply(update, "\n".join(lines))
 
-    async def _run_brain(self, update: Update, text: str) -> None:
+    async def _run_brain(self, update: Update, text: str, context: ContextTypes.DEFAULT_TYPE = None) -> None:
         """Route arbitrary text through STARFIRE brain and reply."""
         await update.message.chat.send_action("typing")
+
+        attachments = []
+        if context is not None:
+            attachments = context.user_data.pop("pending_attachments", [])
+
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(User).where(User.telegram_id == update.effective_user.id)
@@ -1136,7 +1141,7 @@ class TelegramHandlers:
 
             engine = DecisionEngine(session)
             try:
-                reply = await engine.process_message(user, text)
+                reply = await engine.process_message(user, text, attachments=attachments or None)
                 await session.commit()
             except Exception as e:
                 logger.error("brain_error", error=str(e))
@@ -1144,6 +1149,63 @@ class TelegramHandlers:
                 reply = "Something went wrong. Try again."
 
         await self._safe_reply(update, reply)
+
+    # ------------------------------------------------------------------ #
+    # PHOTO / DOCUMENT — queue as email attachments
+    # ------------------------------------------------------------------ #
+
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Download photo and queue it as a pending email attachment."""
+        message = update.message
+        photo = message.photo[-1]  # highest resolution
+        tg_file = await context.bot.get_file(photo.file_id)
+        file_bytes = bytes(await tg_file.download_as_bytearray())
+        filename = f"photo_{photo.file_unique_id}.jpg"
+
+        if "pending_attachments" not in context.user_data:
+            context.user_data["pending_attachments"] = []
+        context.user_data["pending_attachments"].append({
+            "bytes": file_bytes,
+            "filename": filename,
+            "mime_type": "image/jpeg",
+        })
+
+        caption = message.caption or ""
+        if caption:
+            await self._run_brain(update, caption, context)
+        else:
+            count = len(context.user_data["pending_attachments"])
+            await message.reply_text(
+                f"📎 Photo queued ({count} attachment{'s' if count > 1 else ''} ready). "
+                "Just tell me who to send it to and what to say."
+            )
+
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Download a file/document and queue it as a pending email attachment."""
+        message = update.message
+        doc = message.document
+        tg_file = await context.bot.get_file(doc.file_id)
+        file_bytes = bytes(await tg_file.download_as_bytearray())
+        filename = doc.file_name or f"file_{doc.file_unique_id}"
+        mime_type = doc.mime_type or "application/octet-stream"
+
+        if "pending_attachments" not in context.user_data:
+            context.user_data["pending_attachments"] = []
+        context.user_data["pending_attachments"].append({
+            "bytes": file_bytes,
+            "filename": filename,
+            "mime_type": mime_type,
+        })
+
+        caption = message.caption or ""
+        if caption:
+            await self._run_brain(update, caption, context)
+        else:
+            count = len(context.user_data["pending_attachments"])
+            await message.reply_text(
+                f"📎 {filename} queued ({count} attachment{'s' if count > 1 else ''} ready). "
+                "Just tell me who to send it to."
+            )
 
     # ------------------------------------------------------------------ #
     # NATURAL LANGUAGE (main STARFIRE brain)
@@ -1174,32 +1236,7 @@ class TelegramHandlers:
             if not user_text:
                 return
 
-        await update.message.chat.send_action("typing")
-
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
-            user = result.scalar_one_or_none()
-            if not user:
-                user = User(
-                    telegram_id=update.effective_user.id,
-                    username=update.effective_user.username,
-                    first_name=update.effective_user.first_name,
-                    conversation_history=[],
-                    preferences={},
-                )
-                session.add(user)
-                await session.flush()
-
-            engine = DecisionEngine(session)
-            try:
-                reply = await engine.process_message(user, user_text)
-                await session.commit()
-            except Exception as e:
-                logger.error("message_error", error=str(e))
-                await session.rollback()
-                reply = "Something went wrong on my end. Try again in a moment."
-
-        await self._safe_reply(update, reply)
+        await self._run_brain(update, user_text, context)
 
     # ------------------------------------------------------------------ #
     # VOICE / AUDIO MESSAGES
@@ -1253,7 +1290,7 @@ class TelegramHandlers:
             if not transcript:
                 return
 
-        await self._run_brain(update, transcript)
+        await self._run_brain(update, transcript, context)
 
     async def _safe_reply(self, update: Update, text: str) -> None:
         if not text:
