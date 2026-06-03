@@ -14,8 +14,11 @@ depends_on = None
 
 
 def upgrade():
-    # Enable pgvector extension (no-op if not available)
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # Enable pgvector extension — silently skip if not installed on this PostgreSQL instance
+    try:
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception:
+        pass  # pgvector not available; knowledge_item vector search falls back to ILIKE
 
     # habits
     op.create_table(
