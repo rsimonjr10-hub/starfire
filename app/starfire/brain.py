@@ -71,30 +71,57 @@ class StarfireBrain:
                 "raw": "",
             }
 
+    @staticmethod
+    def _repair_json(s: str) -> str:
+        """Escape literal newlines/tabs inside JSON string values so json.loads won't choke."""
+        result = []
+        in_string = False
+        i = 0
+        while i < len(s):
+            c = s[i]
+            if c == '"' and (i == 0 or s[i - 1] != "\\"):
+                in_string = not in_string
+                result.append(c)
+            elif in_string and c == "\n":
+                result.append("\\n")
+            elif in_string and c == "\r":
+                result.append("\\r")
+            elif in_string and c == "\t":
+                result.append("\\t")
+            else:
+                result.append(c)
+            i += 1
+        return "".join(result)
+
+    def _try_parse_json(self, s: str) -> Optional[dict]:
+        """Try json.loads, then retry with repaired string. Return dict or None."""
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            pass
+        try:
+            return json.loads(self._repair_json(s))
+        except json.JSONDecodeError:
+            return None
+
     def _parse_response(self, raw: str) -> dict:
         """Detect whether STARFIRE returned JSON action or plain chat text."""
         stripped = raw.strip()
 
         # Try direct JSON parse first
         if stripped.startswith("{"):
-            try:
-                data = json.loads(stripped)
-                if "action" in data:
-                    logger.info("brain_action_detected", action=data.get("action"), parsed_via="direct_json")
-                    return {"type": "action", "content": data, "raw": raw}
-            except json.JSONDecodeError:
-                pass
+            data = self._try_parse_json(stripped)
+            if data and "action" in data:
+                logger.info("brain_action_detected", action=data.get("action"), parsed_via="direct_json")
+                return {"type": "action", "content": data, "raw": raw}
 
         # Try extracting JSON from markdown code block
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
         if match:
-            try:
-                data = json.loads(match.group(1))
-                if "action" in data:
-                    logger.info("brain_action_detected", action=data.get("action"), parsed_via="code_block")
-                    return {"type": "action", "content": data, "raw": raw}
-            except json.JSONDecodeError:
-                pass
+            data = self._try_parse_json(match.group(1))
+            if data and "action" in data:
+                logger.info("brain_action_detected", action=data.get("action"), parsed_via="code_block")
+                return {"type": "action", "content": data, "raw": raw}
 
         logger.info("brain_chat_response", preview=stripped[:120])
         return {"type": "chat", "content": stripped, "raw": raw}
