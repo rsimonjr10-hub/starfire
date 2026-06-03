@@ -156,7 +156,7 @@ class DecisionEngine:
 
         # ── GOOGLE ──────────────────────────────────────────────────────
         if action_type in GOOGLE_ACTIONS:
-            return await self._handle_google_action(user, action, history, context)
+            return await self._handle_google_action(user, action, history, context, attachments=attachments)
 
         # ── MEMORY ──────────────────────────────────────────────────────
         if action_type == "REMEMBER":
@@ -783,7 +783,7 @@ class DecisionEngine:
         from app.integrations.gmail_service import SheetsService
         return SheetsService(user.google_token_json)
 
-    async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
+    async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str], attachments: Optional[list] = None) -> str:
         action_type = action.get("action")
         try:
             gmail, drive = self._get_google_services(user)
