@@ -57,7 +57,7 @@ class StarfireBrain:
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=4096,
                 system=system,
                 messages=messages,
             )
