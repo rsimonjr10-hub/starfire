@@ -23,6 +23,8 @@ from app.workers.market_worker import MarketWorker
 from app.workers.event_worker import EventWorker
 from app.workers.report_worker import ReportWorker
 from app.workers.automation_worker import AutomationWorker
+from app.monitoring.sentinel import sentinel
+from app.monitoring.health_worker import HealthWorker
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 structlog.configure(
@@ -41,11 +43,16 @@ market_worker = MarketWorker(interval_seconds=300)
 event_worker = EventWorker()
 report_worker = ReportWorker()
 automation_worker = AutomationWorker(interval_seconds=900)
+health_worker = HealthWorker()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("starfire_starting", env=settings.app_env)
+
+    # Initialize sentinel (Sentry + Telegram alerting)
+    admin_id = int(settings.admin_telegram_id) if settings.admin_telegram_id else None
+    sentinel.init(sentry_dsn=settings.sentry_dsn, admin_telegram_id=admin_id)
 
     # Initialize database tables
     await init_db()
@@ -60,6 +67,7 @@ async def lifespan(app: FastAPI):
     event_task = asyncio.create_task(event_worker.start())
     report_task = asyncio.create_task(report_worker.start())
     automation_task = asyncio.create_task(automation_worker.start())
+    health_task = asyncio.create_task(health_worker.start())
     logger.info("background_workers_started")
 
     yield
@@ -69,10 +77,12 @@ async def lifespan(app: FastAPI):
     await event_worker.stop()
     await report_worker.stop()
     await automation_worker.stop()
+    await health_worker.stop()
     market_task.cancel()
     event_task.cancel()
     report_task.cancel()
     automation_task.cancel()
+    health_task.cancel()
     # Shut down telegram application cleanly
     try:
         from app.telegram.bot import get_application

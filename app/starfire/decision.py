@@ -90,6 +90,25 @@ class DecisionEngine:
         return None
 
     async def process_message(self, user: User, message: str, attachments: Optional[list] = None) -> str:
+        from app.monitoring.sentinel import sentinel
+        try:
+            return await self._process_message_inner(user, message, attachments)
+        except Exception as e:
+            await sentinel.capture(
+                e,
+                category="process_message",
+                context={"message": message[:200], "user_id": user.telegram_id},
+                user_telegram_id=user.telegram_id,
+            )
+            recovered = await sentinel.try_recover(e, "process_message")
+            if recovered:
+                try:
+                    return await self._process_message_inner(user, message, attachments)
+                except Exception as e2:
+                    await sentinel.capture(e2, category="process_message_retry", user_telegram_id=user.telegram_id)
+            return "⚠️ Something went wrong on my end. I've logged it — try again in a moment."
+
+    async def _process_message_inner(self, user: User, message: str, attachments: Optional[list] = None) -> str:
         context = await self._build_context(user)
         history = user.conversation_history or []
 

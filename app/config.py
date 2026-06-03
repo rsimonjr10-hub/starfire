@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openai_api_key: str = ""
 
+    # Monitoring & self-healing
+    sentry_dsn: str = ""
+    admin_telegram_id: str = ""  # Telegram user ID to receive sentinel alerts
+
     # Knowledge OS — embeddings model
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536

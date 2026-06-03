@@ -1144,9 +1144,15 @@ class TelegramHandlers:
                 reply = await engine.process_message(user, text, attachments=attachments or None)
                 await session.commit()
             except Exception as e:
-                logger.error("brain_error", error=str(e))
+                from app.monitoring.sentinel import sentinel
+                await sentinel.capture(
+                    e,
+                    category="telegram_handler",
+                    context={"text": text[:200]},
+                    user_telegram_id=update.effective_user.id,
+                )
                 await session.rollback()
-                reply = "Something went wrong. Try again."
+                reply = "Something went wrong. I've flagged it — try again in a moment."
 
         await self._safe_reply(update, reply)
 
