@@ -133,6 +133,34 @@ class AlpacaBroker:
             slippage=slippage,
         )
 
+    async def get_account(self) -> dict:
+        """Account equity, buying power, and today's P&L."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v2/account", headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_positions(self) -> list[dict]:
+        """All open positions."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v2/positions", headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_recent_orders(self, limit: int = 20, days_back: int = 5) -> list[dict]:
+        """Recent filled orders (default: last 5 days, covers weekends/overnight)."""
+        from datetime import timedelta
+        # Alpaca requires RFC3339 with 'Z', not Python's '+00:00'
+        after = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self.base_url}/v2/orders",
+                headers=self.headers,
+                params={"status": "filled", "limit": limit, "after": after, "direction": "desc"},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
 
 def get_broker():
     if settings.use_mock_broker:

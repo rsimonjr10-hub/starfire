@@ -16,12 +16,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code
 COPY . .
 
+# Make startup script executable
+RUN chmod +x scripts/start.sh
+
 # Create non-root user
 RUN useradd -m -u 1001 starfire && chown -R starfire:starfire /app
 USER starfire
 
-# Expose port (Railway injects PORT env)
+# Railway injects PORT — default 8000
 EXPOSE 8000
 
-# Run migrations then start server
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "scripts/start.sh"]
