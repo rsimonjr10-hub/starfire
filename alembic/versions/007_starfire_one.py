@@ -14,11 +14,13 @@ depends_on = None
 
 
 def upgrade():
-    # Enable pgvector extension — silently skip if not installed on this PostgreSQL instance
+    # Enable pgvector — use savepoint so a missing extension doesn't abort the transaction
     try:
+        op.execute("SAVEPOINT pgvector_ext")
         op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        op.execute("RELEASE SAVEPOINT pgvector_ext")
     except Exception:
-        pass  # pgvector not available; knowledge_item vector search falls back to ILIKE
+        op.execute("ROLLBACK TO SAVEPOINT pgvector_ext")
 
     # habits
     op.create_table(
@@ -194,16 +196,23 @@ def upgrade():
     op.create_index("ix_knowledge_user_id", "knowledge_items", ["user_id"])
     op.create_index("ix_knowledge_is_active", "knowledge_items", ["is_active"])
 
-    # Try to add proper vector column — only works if pgvector is installed
+    # Try to add vector column + index — only works if pgvector is installed
     try:
+        op.execute("SAVEPOINT pgvector_col")
         op.execute("ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS embedding_vec vector(1536)")
+        op.execute("RELEASE SAVEPOINT pgvector_col")
+    except Exception:
+        op.execute("ROLLBACK TO SAVEPOINT pgvector_col")
+    try:
+        op.execute("SAVEPOINT pgvector_idx")
         op.execute("""
             CREATE INDEX IF NOT EXISTS ix_knowledge_embedding
             ON knowledge_items USING ivfflat (embedding_vec vector_cosine_ops)
             WITH (lists = 100)
         """)
+        op.execute("RELEASE SAVEPOINT pgvector_idx")
     except Exception:
-        pass  # pgvector not installed — falls back to text column + ILIKE search
+        op.execute("ROLLBACK TO SAVEPOINT pgvector_idx")
 
     # automations
     op.create_table(
