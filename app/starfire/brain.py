@@ -136,6 +136,32 @@ class StarfireBrain:
             trimmed = trimmed[1:]
         return trimmed
 
+    async def extract_action_from_draft(self, draft_message: str) -> Optional[dict]:
+        """Given a STEP 1 draft shown to the user, extract the action JSON via a targeted call."""
+        prompt = (
+            "The user just confirmed the following draft. "
+            "Output ONLY the raw JSON action object — no prose, no markdown, no explanation.\n\n"
+            f"Draft:\n{draft_message}"
+        )
+        try:
+            response = await self.client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                system=(
+                    "You are a JSON extractor. Read the draft and output exactly one JSON object "
+                    "with an 'action' field (e.g. SEND_EMAIL, ROUTE_TRADE). "
+                    "Include all relevant fields (to, subject, body, etc.). "
+                    "Output raw JSON only — no text before or after."
+                ),
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            logger.info("extract_action_raw", preview=raw[:120])
+            return self._try_parse_json(raw)
+        except Exception as e:
+            logger.error("extract_action_error", error=str(e))
+            return None
+
     def append_to_history(
         self, history: list[dict], user_msg: str, assistant_msg: str
     ) -> list[dict]:

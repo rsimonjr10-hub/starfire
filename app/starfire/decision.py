@@ -62,9 +62,50 @@ class DecisionEngine:
         self.osiris = OsirisExecutor(db)
         self.publisher = EventPublisher()
 
+    _CONFIRMATION_WORDS = frozenset({
+        "yes", "yep", "yup", "yeah", "yea", "go ahead", "send it", "do it",
+        "proceed", "confirmed", "ok", "okay", "sure", "send", "go",
+        "absolutely", "please do", "make it happen", "do that", "fire it",
+        "ship it", "correct", "affirmative", "sounds good", "looks good",
+        "let's do it", "lets do it", "do it.", "yes.", "send it.",
+    })
+
+    _STEP1_SIGNALS = (
+        "shall i send", "shall i proceed", "want me to send",
+        "should i send", "ready to send", "send this?", "send it?",
+        "shall i fire", "good to send", "confirm and i'll send",
+    )
+
+    def _is_confirmation(self, message: str) -> bool:
+        cleaned = message.strip().rstrip(".!?").lower()
+        return cleaned in self._CONFIRMATION_WORDS
+
+    def _find_pending_draft(self, history: list) -> Optional[str]:
+        """Return the most recent STEP 1 assistant draft that's awaiting confirmation."""
+        for msg in reversed(history):
+            if msg.get("role") == "assistant":
+                content_lower = msg["content"].lower()
+                if any(sig in content_lower for sig in self._STEP1_SIGNALS):
+                    return msg["content"]
+        return None
+
     async def process_message(self, user: User, message: str, attachments: Optional[list] = None) -> str:
         context = await self._build_context(user)
         history = user.conversation_history or []
+
+        # Confirmation fast-path: if user says yes/go ahead and there's a pending draft,
+        # extract the action directly instead of asking the brain again (which loops).
+        if self._is_confirmation(message):
+            draft = self._find_pending_draft(history)
+            if draft:
+                logger.info("confirmation_intercepted", message=message)
+                action = await self.brain.extract_action_from_draft(draft)
+                if action and "action" in action:
+                    logger.info("action_extracted_from_draft", action=action.get("action"))
+                    reply = await self._handle_action(user, action, history, context, attachments=attachments)
+                    updated_history = self.brain.append_to_history(history, message, reply)
+                    user.conversation_history = updated_history[-40:]
+                    return reply
 
         result = await self.brain.think(message, history, context)
 
