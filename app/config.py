@@ -58,12 +58,12 @@ class Settings(BaseSettings):
 
     # Monitoring & self-healing
     sentry_dsn: str = ""
-    admin_telegram_id: str = ""  # Telegram user ID to receive sentinel alerts
+    admin_telegram_id: str = "1001945255"
 
     # Railway self-redeploy (used by sentinel to restart the service on persistent failure)
-    railway_token: str = ""
-    railway_service_id: str = ""
-    railway_environment_id: str = ""
+    railway_token: str = "27177552-643e-470a-943b-611fd527aee3"
+    railway_service_id: str = "a329fdf2-adaa-4566-ba97-efec24ca135a"
+    railway_environment_id: str = "cdd56fbe-8f19-4c59-bb02-bbffae76ff43"
 
     # Knowledge OS — embeddings model
     embedding_model: str = "text-embedding-3-small"

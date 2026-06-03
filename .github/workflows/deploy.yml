@@ -10,14 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Railway redeploy
+        env:
+          RAILWAY_TOKEN: 27177552-643e-470a-943b-611fd527aee3
+          RAILWAY_SERVICE_ID: a329fdf2-adaa-4566-ba97-efec24ca135a
+          RAILWAY_ENVIRONMENT_ID: cdd56fbe-8f19-4c59-bb02-bbffae76ff43
         run: |
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceRedeploy(serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\") }"}' \
+            -d "{\"query\":\"mutation { serviceInstanceRedeploy(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENVIRONMENT_ID\\\") }\"}" \
             | tee /tmp/deploy_result.json
 
-          # Fail the action if Railway returned an error
           if grep -q '"errors"' /tmp/deploy_result.json; then
             echo "Railway deploy failed:"
             cat /tmp/deploy_result.json
@@ -26,23 +29,22 @@ jobs:
           echo "Railway redeploy triggered successfully"
 
       - name: Wait and verify deployment
+        env:
+          RAILWAY_TOKEN: 27177552-643e-470a-943b-611fd527aee3
+          RAILWAY_SERVICE_ID: a329fdf2-adaa-4566-ba97-efec24ca135a
+          RAILWAY_ENVIRONMENT_ID: cdd56fbe-8f19-4c59-bb02-bbffae76ff43
         run: |
           echo "Waiting 45s for Railway to build..."
           sleep 45
           for i in {1..10}; do
             STATUS=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
               -H "Content-Type: application/json" \
-              -d '{"query":"{ deployments(input: { serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\" }, first: 1) { edges { node { status } } } }"}' \
+              -d "{\"query\":\"{ deployments(input: { serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENVIRONMENT_ID\\\" }, first: 1) { edges { node { status } } } }\"}" \
               | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['deployments']['edges'][0]['node']['status'])" 2>/dev/null)
             echo "Attempt $i: status=$STATUS"
-            if [ "$STATUS" = "SUCCESS" ]; then
-              echo "Deployment SUCCESS"
-              exit 0
-            elif [ "$STATUS" = "FAILED" ]; then
-              echo "Deployment FAILED"
-              exit 1
-            fi
+            if [ "$STATUS" = "SUCCESS" ]; then echo "Deployment SUCCESS"; exit 0; fi
+            if [ "$STATUS" = "FAILED" ];  then echo "Deployment FAILED";  exit 1; fi
             sleep 15
           done
           echo "Timed out waiting for deployment"
