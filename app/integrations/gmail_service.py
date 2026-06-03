@@ -214,6 +214,7 @@ class GmailService:
                 userId="me", id=message_id, format="minimal"
             ).execute()
             labels = msg.get("labelIds", [])
+            logger.info("gmail_verify_sent_labels", message_id=message_id, labels=labels)
             return "SENT" in labels
         except Exception as e:
             logger.error("gmail_verify_sent_error", message_id=message_id, error=str(e))

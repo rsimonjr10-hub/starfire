@@ -80,6 +80,7 @@ class StarfireBrain:
             try:
                 data = json.loads(stripped)
                 if "action" in data:
+                    logger.info("brain_action_detected", action=data.get("action"), parsed_via="direct_json")
                     return {"type": "action", "content": data, "raw": raw}
             except json.JSONDecodeError:
                 pass
@@ -90,10 +91,12 @@ class StarfireBrain:
             try:
                 data = json.loads(match.group(1))
                 if "action" in data:
+                    logger.info("brain_action_detected", action=data.get("action"), parsed_via="code_block")
                     return {"type": "action", "content": data, "raw": raw}
             except json.JSONDecodeError:
                 pass
 
+        logger.info("brain_chat_response", preview=stripped[:120])
         return {"type": "chat", "content": stripped, "raw": raw}
 
     def _trim_history(self, history: list[dict]) -> list[dict]:

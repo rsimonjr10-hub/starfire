@@ -779,16 +779,18 @@ class DecisionEngine:
                 body = action.get("body", "")
                 if not to or not subject or not body:
                     return "Missing to/subject/body."
+                logger.info("send_email_attempt", to=to, subject=subject)
                 message_id = gmail.send_email(
                     to=to, subject=subject, body=body,
                     cc=action.get("cc"), bcc=action.get("bcc"),
                     reply_to_thread=action.get("reply_to_thread"),
                     reply_to_message_id=action.get("reply_to_message_id"),
                 )
+                logger.info("send_email_result", message_id=message_id)
                 if not message_id:
                     return "❌ Send failed — Gmail API returned an error. The email was NOT sent. Want me to try again?"
-                # Verify it actually landed in the sent folder
                 confirmed = gmail.verify_sent(message_id)
+                logger.info("send_email_verify", message_id=message_id, confirmed=confirmed)
                 cc_str = f" (CC: {action['cc']})" if action.get("cc") else ""
                 if confirmed:
                     return (
