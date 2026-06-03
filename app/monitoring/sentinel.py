@@ -102,6 +102,12 @@ class Sentinel:
             )
             await self._alert(msg, user_telegram_id)
 
+        # Auto-redeploy at double the threshold — escalate beyond in-process recovery
+        if count >= _ERROR_THRESHOLD * 2 and (now - last) > _ALERT_COOLDOWN:
+            asyncio.create_task(
+                self.self_redeploy(reason=f"{count} {category} errors in 5 min")
+            )
+
     # ── Auto-recovery ────────────────────────────────────────────────────────
 
     async def try_recover(self, error: Exception, category: str) -> bool:
@@ -193,6 +199,52 @@ class Sentinel:
             logger.info("sentinel_health_ok", results=results)
 
         return results
+
+    # ── Self-redeploy ────────────────────────────────────────────────────────
+
+    async def self_redeploy(self, reason: str = "") -> bool:
+        """
+        Trigger a Railway redeploy of this service.
+        Called by the sentinel when persistent errors can't be recovered in-process.
+        Returns True if redeploy was successfully triggered.
+        """
+        from app.config import settings
+        token = settings.railway_token
+        service_id = settings.railway_service_id
+        env_id = settings.railway_environment_id
+
+        if not all([token, service_id, env_id]):
+            logger.warning("sentinel_redeploy_skipped", reason="Railway env vars not set")
+            return False
+
+        try:
+            import httpx
+            mutation = {
+                "query": (
+                    f'mutation {{ serviceInstanceRedeploy('
+                    f'serviceId: "{service_id}", '
+                    f'environmentId: "{env_id}") }}'
+                )
+            }
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://backboard.railway.app/graphql/v2",
+                    json=mutation,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            data = resp.json()
+            if "errors" in data:
+                logger.error("sentinel_redeploy_error", errors=data["errors"])
+                return False
+            logger.info("sentinel_redeploy_triggered", reason=reason)
+            await self._alert(
+                f"🔄 <b>STARFIRE Sentinel — Auto-Redeploy</b>\n"
+                f"Triggered Railway redeploy.\nReason: {reason or 'persistent errors'}"
+            )
+            return True
+        except Exception as e:
+            logger.error("sentinel_redeploy_exception", error=str(e))
+            return False
 
     # ── Internal ─────────────────────────────────────────────────────────────
 

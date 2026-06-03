@@ -1,0 +1,25 @@
+name: Auto-merge Claude branches
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+jobs:
+  enable-automerge:
+    runs-on: ubuntu-latest
+    # Only auto-merge branches created by Claude (sentinel fixes)
+    if: startsWith(github.head_ref, 'claude/')
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --auto \
+            --squash \
+            --repo ${{ github.repository }}
+          echo "Auto-merge enabled for PR #${{ github.event.pull_request.number }}"

@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     admin_telegram_id: str = ""  # Telegram user ID to receive sentinel alerts
 
+    # Railway self-redeploy (used by sentinel to restart the service on persistent failure)
+    railway_token: str = ""
+    railway_service_id: str = ""
+    railway_environment_id: str = ""
+
     # Knowledge OS — embeddings model
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536
