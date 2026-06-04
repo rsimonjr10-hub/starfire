@@ -1,3 +1,4 @@
+import os
 import json
 import structlog
 from fastapi import APIRouter, Request
@@ -7,6 +8,12 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.user import User
+
+# Google often returns previously-granted scopes (e.g. an old gmail.readonly
+# grant that hasn't been revoked) in addition to the ones we request. oauthlib's
+# default strict scope-equality check rejects that with "Scope has changed".
+# Relax it so token exchange succeeds; we still store the actual granted scopes.
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/auth/google", tags=["google-auth"])
