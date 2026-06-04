@@ -709,7 +709,7 @@ class SheetsService:
     def trash_spreadsheet(self, spreadsheet_id: str) -> bool:
         """Move a spreadsheet to Drive trash (recoverable for 30 days)."""
         try:
-            drive = get_drive_service(self._token_json)
+            drive = get_drive_service(self.current_token_json)
             drive.files().update(fileId=spreadsheet_id, body={"trashed": True}).execute()
             return True
         except Exception as e:
@@ -719,7 +719,7 @@ class SheetsService:
     def find_spreadsheet_by_name(self, name: str) -> Optional[str]:
         """Resolve a spreadsheet ID from its name via Drive search."""
         try:
-            drive = get_drive_service(self._token_json)
+            drive = get_drive_service(self.current_token_json)
             safe = name.replace("'", "\\'")
             res = drive.files().list(
                 q=(
