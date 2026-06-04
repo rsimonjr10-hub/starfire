@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 logger = structlog.get_logger(__name__)
 
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://mail.google.com/",  # full Gmail access — required for batchDelete and batchModify
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/drive",
