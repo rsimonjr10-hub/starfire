@@ -1,5 +1,5 @@
 import structlog
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from sqlalchemy import select
@@ -81,7 +81,7 @@ class TelegramHandlers:
             "/cfo — Run CFO financial analysis agent\n\n"
             "<b>Gmail &amp; Drive</b>\n"
             "/inbox — Unread emails\n"
-            "/clean_inbox — Delete spam + archive promotions\n"
+            "/clean_inbox [keyword] — Delete spam/promos; or target by company/subject\n"
             "/search_email [query] — Search emails\n"
             "/drive [query] — Search Google Drive\n"
             "/connect_google — Link your Google account\n\n"
@@ -378,8 +378,33 @@ class TelegramHandlers:
             )
         await self._safe_reply(update, "\n".join(lines))
 
+    # ── INBOX CONFIRMATION KEYBOARD ───────────────────────────────────────
+
+    _INBOX_CONFIRM_KB = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✓ Confirm", callback_data="inbox:confirm"),
+        InlineKeyboardButton("✗ Cancel",  callback_data="inbox:cancel"),
+    ]])
+
+    async def _get_user_by_telegram_id(self, telegram_id: int):
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+            return result.scalar_one_or_none()
+
+    async def _persist_token(self, user_id: int, token_json: str) -> None:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.id == user_id))
+            db_user = result.scalar_one_or_none()
+            if db_user:
+                db_user.google_token_json = token_json
+                await session.commit()
+
     async def cmd_clean_inbox(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Inbox stats + full clean: delete spam, archive promotions."""
+        """
+        /clean_inbox          — bulk: delete spam + archive promotions
+        /clean_inbox amazon   — targeted: delete all mail from 'amazon'
+        /clean_inbox subject:invoice — targeted: use any Gmail search operator
+        Asks for confirmation before any deletion.
+        """
         user = await self._get_or_create_user(update)
         if not user.google_token_json:
             await update.message.reply_text(
@@ -388,77 +413,154 @@ class TelegramHandlers:
             )
             return
 
+        args = context.args or []
         await update.message.chat.send_action("typing")
+
         try:
             from app.integrations.gmail_service import GmailService
-            from app.services.email_organizer import get_inbox_stats, organize_inbox
             gmail = GmailService(user.google_token_json)
-            stats = get_inbox_stats(gmail)
         except Exception as e:
             await update.message.reply_text(f"Could not reach Gmail: {e}")
             return
 
-        spam_count  = stats.get("spam", 0)
-        promo_count = stats.get("promotions", 0)
-        total_dirty = spam_count + promo_count
+        if args:
+            # ── TARGETED MODE ──────────────────────────────────────────────
+            raw   = " ".join(args)
+            # Bare keyword (no Gmail operator) → treat as sender search
+            query = raw if ":" in raw else f"from:{raw}"
 
-        if total_dirty == 0:
+            from app.services.email_organizer import preview_targeted
+            data  = preview_targeted(gmail, query)
+
+            if not data["ids"]:
+                await update.message.reply_text(
+                    f"No emails found matching `{raw}`.", parse_mode=ParseMode.MARKDOWN
+                )
+                return
+
+            context.user_data["inbox_pending"] = {
+                "type":  "targeted",
+                "query": query,
+                "label": raw,
+                "ids":   data["ids"],
+            }
+            lines = [f"*Found {data['count']:,} emails matching '{raw}'*\n"]
+            for p in data["previews"]:
+                lines.append(f"  • {p}")
+            if data["count"] > 5:
+                lines.append(f"  …and {data['count'] - 5:,} more")
+            lines.append(f"\nPermanently delete all {data['count']:,}?")
             await update.message.reply_text(
-                f"*Inbox is clean* ✓\n\nUnread: {stats.get('inbox_unread',0)} · Total inbox: {stats.get('inbox_total',0)}",
-                parse_mode=ParseMode.MARKDOWN,
+                "\n".join(lines), parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self._INBOX_CONFIRM_KB,
+            )
+
+        else:
+            # ── BULK MODE ──────────────────────────────────────────────────
+            from app.services.email_organizer import get_inbox_stats
+            try:
+                stats = get_inbox_stats(gmail)
+            except Exception as e:
+                await update.message.reply_text(f"Could not reach Gmail: {e}")
+                return
+
+            spam_count  = stats.get("spam", 0)
+            promo_count = stats.get("promotions", 0)
+
+            if spam_count == 0 and promo_count == 0:
+                await update.message.reply_text(
+                    f"*Inbox is clean* ✓\n\nUnread: {stats.get('inbox_unread', 0)} · "
+                    f"Total inbox: {stats.get('inbox_total', 0)}",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return
+
+            context.user_data["inbox_pending"] = {"type": "bulk", "stats": stats}
+            lines = [
+                "*Inbox Cleanup Preview*\n",
+                f"  Spam: {spam_count:,} → permanent delete",
+                f"  Promotions: {promo_count:,} → archive",
+                "",
+                "Proceed with cleanup?",
+            ]
+            await update.message.reply_text(
+                "\n".join(lines), parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self._INBOX_CONFIRM_KB,
+            )
+
+    async def handle_inbox_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handles inline keyboard responses for /clean_inbox confirmations."""
+        query = update.callback_query
+        await query.answer()
+
+        pending = context.user_data.pop("inbox_pending", None)
+
+        if query.data == "inbox:cancel" or not pending:
+            await query.edit_message_text("Cancelled.")
+            return
+
+        # ── CONFIRMED ──────────────────────────────────────────────────────
+        user = await self._get_user_by_telegram_id(query.from_user.id)
+        if not user or not user.google_token_json:
+            await query.edit_message_text(
+                "Google account not connected. Use /connect_google."
             )
             return
 
-        preview = (
-            f"*Inbox Cleanup Preview*\n\n"
-            f"  Spam: {spam_count:,} → will be permanently deleted\n"
-            f"  Promotions: {promo_count:,} → will be archived\n\n"
-            f"Cleaning now…"
-        )
-        await update.message.reply_text(preview, parse_mode=ParseMode.MARKDOWN)
-        await update.message.chat.send_action("typing")
+        await query.edit_message_text("Working…")
 
         try:
-            result = organize_inbox(gmail)
+            from app.integrations.gmail_service import GmailService
+            gmail = GmailService(user.google_token_json)
         except Exception as e:
-            await update.message.reply_text(f"Cleanup error: {e}")
+            await query.edit_message_text(f"Gmail error: {e}")
             return
 
-        # Persist refreshed token if needed
+        if pending["type"] == "targeted":
+            result = gmail.batch_delete(pending["ids"])
+            deleted = result.get("deleted", 0)
+            errors  = result.get("errors", 0)
+            if deleted == 0 and errors > 0:
+                await query.edit_message_text(
+                    "Permission error — run /connect_google to reconnect your account."
+                )
+            else:
+                await query.edit_message_text(
+                    f"✓ Deleted {deleted:,} emails matching '{pending['label']}'."
+                    + (f" ({errors} failed)" if errors else "")
+                )
+
+        else:
+            # bulk
+            from app.services.email_organizer import organize_inbox
+            result  = organize_inbox(gmail)
+            total   = result.get("total_cleaned", 0)
+            summary = result.get("summary", {})
+            total_errors = sum(v.get("errors", 0) for v in summary.values())
+
+            if total == 0 and total_errors > 0:
+                await query.edit_message_text(
+                    "Permission error — run /connect_google to reconnect your account."
+                )
+            else:
+                lines = [f"*Inbox cleaned ✓ — {total:,} emails processed*\n"]
+                for cat, res in summary.items():
+                    count = res.get("deleted", 0) + res.get("count", 0)
+                    errs  = res.get("errors", 0)
+                    if count:
+                        verb = "deleted" if cat == "spam" else "archived"
+                        lines.append(f"  • {cat.capitalize()}: {count:,} {verb}")
+                    elif errs:
+                        lines.append(f"  • {cat.capitalize()}: {errs:,} failed")
+                stats = pending.get("stats", {})
+                lines.append(f"\nUnread remaining: {stats.get('inbox_unread', '—')}")
+                await query.edit_message_text(
+                    "\n".join(lines), parse_mode=ParseMode.MARKDOWN
+                )
+
+        # Persist refreshed token if gmail rotated it
         if gmail.current_token_json != user.google_token_json:
-            from app.database import AsyncSessionLocal
-            from sqlalchemy import select
-            async with AsyncSessionLocal() as session:
-                from sqlalchemy import select as _sel
-                from app.models.user import User as _User
-                db_user = (await session.execute(_sel(_User).where(_User.id == user.id))).scalar_one_or_none()
-                if db_user:
-                    db_user.google_token_json = gmail.current_token_json
-                    await session.commit()
-
-        total = result.get("total_cleaned", 0)
-        summary = result.get("summary", {})
-        total_errors = sum(v.get("errors", 0) for v in summary.values())
-
-        if total == 0 and total_errors > 0:
-            await update.message.reply_text(
-                "Gmail permissions have changed. Please use /connect\\_google to "
-                "reconnect your account — inbox deletion requires updated access.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return
-
-        lines = [f"*Inbox cleaned ✓ — {total:,} emails processed*\n"]
-        for cat, res in summary.items():
-            count = res.get("deleted", 0) + res.get("count", 0)
-            errs  = res.get("errors", 0)
-            if count:
-                verb = "deleted" if cat == "spam" else "archived"
-                lines.append(f"  • {cat.capitalize()}: {count:,} {verb}")
-            elif errs:
-                lines.append(f"  • {cat.capitalize()}: {errs:,} failed — reconnect Google")
-        lines.append(f"\nUnread remaining: {stats.get('inbox_unread', '—')}")
-        await self._safe_reply(update, "\n".join(lines))
+            await self._persist_token(user.id, gmail.current_token_json)
 
     async def cmd_search_email(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Usage: /search_email invoices from:amazon"""

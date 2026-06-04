@@ -1,6 +1,6 @@
 import structlog
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from telegram.constants import ParseMode
 from app.config import settings
 from app.telegram.handlers import TelegramHandlers
@@ -66,6 +66,9 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("clean_inbox", h.cmd_clean_inbox))
         _application.add_handler(CommandHandler("search_email", h.cmd_search_email))
         _application.add_handler(CommandHandler("drive", h.cmd_drive))
+
+        # Inline keyboard callbacks
+        _application.add_handler(CallbackQueryHandler(h.handle_inbox_callback, pattern=r"^inbox:"))
 
         # Voice notes and audio files → transcribe → STARFIRE brain
         _application.add_handler(

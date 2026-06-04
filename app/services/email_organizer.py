@@ -70,6 +70,23 @@ def classify_message(msg: dict) -> str:
     return "normal"
 
 
+def preview_targeted(gmail, query: str, max_results: int = 200) -> dict:
+    """
+    Search Gmail for messages matching query; return IDs + subject previews.
+    Returns {"ids": list[str], "count": int, "previews": list[str]}.
+    """
+    ids = gmail.list_messages(query, max_results=max_results)
+    if not ids:
+        return {"ids": [], "count": 0, "previews": []}
+    previews = []
+    for msg_id in ids[:5]:
+        summary = gmail._fetch_summary(msg_id)
+        sender  = summary.get("from", "").split("<")[0].strip() or summary.get("from", "")
+        subject = summary.get("subject") or "(no subject)"
+        previews.append(f"{sender[:25]} — {subject[:50]}")
+    return {"ids": ids, "count": len(ids), "previews": previews}
+
+
 def get_inbox_stats(gmail) -> dict:
     """Return estimated message counts per Gmail category."""
     stats = {}
