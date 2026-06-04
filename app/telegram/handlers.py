@@ -1305,5 +1305,17 @@ class TelegramHandlers:
         for chunk in chunks:
             try:
                 await update.message.reply_text(chunk, parse_mode=parse_mode)
-            except Exception:
-                await update.message.reply_text(chunk)
+            except Exception as fmt_err:
+                # Log so sentinel can detect format mismatches (e.g. HTML sent with Markdown mode)
+                logger.warning(
+                    "safe_reply_format_fallback",
+                    parse_mode=parse_mode,
+                    error=str(fmt_err),
+                    text_preview=chunk[:120],
+                )
+                try:
+                    await update.message.reply_text(chunk)
+                except Exception as send_err:
+                    logger.error("safe_reply_send_failed", error=str(send_err))
+                    from app.monitoring.sentinel import sentinel
+                    await sentinel.record_error(send_err, "telegram_reply")
