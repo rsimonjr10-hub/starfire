@@ -1,5 +1,6 @@
 import os
 import json
+import httpx
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -9,11 +10,13 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.user import User
 
-# Google often returns previously-granted scopes (e.g. an old gmail.readonly
-# grant that hasn't been revoked) in addition to the ones we request. oauthlib's
-# default strict scope-equality check rejects that with "Scope has changed".
-# Relax it so token exchange succeeds; we still store the actual granted scopes.
+# Belt-and-suspenders: Google returns previously-granted scopes (e.g. an old
+# gmail.readonly grant) alongside the ones we request. The callback below does
+# its own token exchange (no oauthlib scope check), but this also relaxes the
+# check for any other code path that goes through oauthlib.
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/auth/google", tags=["google-auth"])
@@ -81,17 +84,36 @@ async def google_auth_callback(request: Request, code: str = None, state: str = 
     except ValueError:
         return HTMLResponse("<h2>Invalid state.</h2>", status_code=400)
 
+    # Exchange the authorization code for tokens directly against Google's
+    # token endpoint. We deliberately bypass google-auth-oauthlib's
+    # flow.fetch_token() here: oauthlib enforces a strict scope-equality check
+    # and raises "Scope has changed" whenever Google returns a previously
+    # granted scope (e.g. a lingering gmail.readonly grant) that isn't in our
+    # request. A raw exchange has no such check and simply records whatever
+    # scopes Google actually grants.
     try:
-        flow = _flow(state=state)
-        flow.fetch_token(code=code)
-        creds = flow.credentials
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                _TOKEN_URI,
+                data={
+                    "code": code,
+                    "client_id": settings.google_client_id,
+                    "client_secret": settings.google_client_secret,
+                    "redirect_uri": _REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+        resp.raise_for_status()
+        td = resp.json()
+        if "access_token" not in td:
+            raise ValueError(td.get("error_description") or td.get("error") or "no access_token in response")
         token_data = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-            "scopes": list(creds.scopes or SCOPES),
+            "token": td["access_token"],
+            "refresh_token": td.get("refresh_token"),
+            "token_uri": _TOKEN_URI,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "scopes": td.get("scope", "").split() or SCOPES,
         }
         token_json = json.dumps(token_data)
     except Exception as e:
