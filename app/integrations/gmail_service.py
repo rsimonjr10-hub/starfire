@@ -361,6 +361,131 @@ class GmailService:
             logger.error("gmail_mark_read_error", error=str(e))
             return False
 
+    # ── BULK OPERATIONS ────────────────────────────────────────────────────
+
+    def list_category(self, category: str, max_results: int = 200) -> list[str]:
+        """Return message IDs in a Gmail category. category: spam|promotions|social|updates|forums"""
+        LABEL_MAP = {
+            "spam":       "SPAM",
+            "promotions": "CATEGORY_PROMOTIONS",
+            "social":     "CATEGORY_SOCIAL",
+            "updates":    "CATEGORY_UPDATES",
+            "forums":     "CATEGORY_FORUMS",
+        }
+        label = LABEL_MAP.get(category.lower(), category.upper())
+        try:
+            ids = []
+            page_token = None
+            while len(ids) < max_results:
+                kwargs = dict(userId="me", labelIds=[label], maxResults=min(500, max_results - len(ids)))
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                res = self._svc.users().messages().list(**kwargs).execute()
+                ids.extend(m["id"] for m in res.get("messages", []))
+                page_token = res.get("nextPageToken")
+                if not page_token:
+                    break
+            return ids
+        except Exception as e:
+            logger.error("gmail_list_category_error", category=category, error=str(e))
+            return []
+
+    def batch_delete(self, message_ids: list[str]) -> dict:
+        """Permanently delete multiple messages (bypasses trash). Use for spam."""
+        if not message_ids:
+            return {"deleted": 0, "errors": 0}
+        deleted, errors = 0, 0
+        for i in range(0, len(message_ids), 1000):
+            chunk = message_ids[i:i + 1000]
+            try:
+                self._svc.users().messages().batchDelete(
+                    userId="me", body={"ids": chunk},
+                ).execute()
+                deleted += len(chunk)
+            except Exception as e:
+                logger.error("gmail_batch_delete_error", chunk_size=len(chunk), error=str(e))
+                errors += len(chunk)
+        return {"deleted": deleted, "errors": errors}
+
+    def batch_trash(self, message_ids: list[str]) -> dict:
+        """Move multiple messages to trash (recoverable). Use for promotions."""
+        if not message_ids:
+            return {"trashed": 0, "errors": 0}
+        trashed, errors = 0, 0
+        for i in range(0, len(message_ids), 1000):
+            chunk = message_ids[i:i + 1000]
+            try:
+                self._svc.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": chunk, "addLabelIds": ["TRASH"], "removeLabelIds": ["INBOX", "UNREAD"]},
+                ).execute()
+                trashed += len(chunk)
+            except Exception as e:
+                logger.error("gmail_batch_trash_error", chunk_size=len(chunk), error=str(e))
+                errors += len(chunk)
+        return {"trashed": trashed, "errors": errors}
+
+    def batch_archive(self, message_ids: list[str]) -> dict:
+        """Archive multiple messages — removes INBOX label, keeps in All Mail."""
+        if not message_ids:
+            return {"archived": 0, "errors": 0}
+        archived, errors = 0, 0
+        for i in range(0, len(message_ids), 1000):
+            chunk = message_ids[i:i + 1000]
+            try:
+                self._svc.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": chunk, "removeLabelIds": ["INBOX"]},
+                ).execute()
+                archived += len(chunk)
+            except Exception as e:
+                logger.error("gmail_batch_archive_error", chunk_size=len(chunk), error=str(e))
+                errors += len(chunk)
+        return {"archived": archived, "errors": errors}
+
+    def count_messages(self, query: str) -> int:
+        """Return an estimated count of messages matching a Gmail search query."""
+        try:
+            res = self._svc.users().messages().list(
+                userId="me", q=query, maxResults=1,
+            ).execute()
+            return res.get("resultSizeEstimate", 0)
+        except Exception as e:
+            logger.error("gmail_count_error", query=query, error=str(e))
+            return 0
+
+    def get_or_create_label(self, name: str, bg_color: str = "#444444", text_color: str = "#ffffff") -> Optional[str]:
+        """Return label_id for a label by name, creating it if it doesn't exist."""
+        try:
+            res = self._svc.users().labels().list(userId="me").execute()
+            for lbl in res.get("labels", []):
+                if lbl["name"].lower() == name.lower():
+                    return lbl["id"]
+            created = self._svc.users().labels().create(
+                userId="me",
+                body={
+                    "name": name,
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                    "color": {"backgroundColor": bg_color, "textColor": text_color},
+                },
+            ).execute()
+            return created.get("id")
+        except Exception as e:
+            logger.error("gmail_get_or_create_label_error", name=name, error=str(e))
+            return None
+
+    def apply_label(self, message_id: str, label_id: str) -> bool:
+        """Apply a label to a message."""
+        try:
+            self._svc.users().messages().modify(
+                userId="me", id=message_id, body={"addLabelIds": [label_id]},
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error("gmail_apply_label_error", message_id=message_id, error=str(e))
+            return False
+
     def _fetch_summary(self, message_id: str) -> dict:
         try:
             msg = self._svc.users().messages().get(

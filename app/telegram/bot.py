@@ -63,6 +63,7 @@ async def get_application() -> Application:
         # Google (Gmail + Drive + Calendar + Sheets)
         _application.add_handler(CommandHandler("connect_google", h.cmd_connect_google))
         _application.add_handler(CommandHandler("inbox", h.cmd_inbox))
+        _application.add_handler(CommandHandler("clean_inbox", h.cmd_clean_inbox))
         _application.add_handler(CommandHandler("search_email", h.cmd_search_email))
         _application.add_handler(CommandHandler("drive", h.cmd_drive))
 
