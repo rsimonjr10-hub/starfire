@@ -1,4 +1,6 @@
+import os
 import json
+import httpx
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -7,6 +9,10 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.user import User
+
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/auth/google", tags=["google-auth"])
@@ -56,7 +62,6 @@ async def google_auth_start(telegram_id: str):
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
-        include_granted_scopes="true",
     )
     return RedirectResponse(auth_url)
 
@@ -76,16 +81,28 @@ async def google_auth_callback(request: Request, code: str = None, state: str = 
         return HTMLResponse("<h2>Invalid state.</h2>", status_code=400)
 
     try:
-        flow = _flow(state=state)
-        flow.fetch_token(code=code)
-        creds = flow.credentials
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                _TOKEN_URI,
+                data={
+                    "code": code,
+                    "client_id": settings.google_client_id,
+                    "client_secret": settings.google_client_secret,
+                    "redirect_uri": _REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+        resp.raise_for_status()
+        td = resp.json()
+        if "access_token" not in td:
+            raise ValueError(td.get("error_description") or td.get("error") or "no access_token")
         token_data = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-            "scopes": list(creds.scopes or SCOPES),
+            "token": td["access_token"],
+            "refresh_token": td.get("refresh_token"),
+            "token_uri": _TOKEN_URI,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "scopes": td.get("scope", "").split() or SCOPES,
         }
         token_json = json.dumps(token_data)
     except Exception as e:
