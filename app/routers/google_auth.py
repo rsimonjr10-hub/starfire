@@ -56,7 +56,6 @@ async def google_auth_start(telegram_id: str):
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
-        include_granted_scopes="true",
     )
     return RedirectResponse(auth_url)
 
