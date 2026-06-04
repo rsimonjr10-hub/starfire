@@ -390,6 +390,25 @@ class GmailService:
             logger.error("gmail_list_category_error", category=category, error=str(e))
             return []
 
+    def list_messages(self, query: str, max_results: int = 200) -> list[str]:
+        """Return message IDs matching a Gmail search query."""
+        try:
+            ids = []
+            page_token = None
+            while len(ids) < max_results:
+                kwargs = dict(userId="me", q=query, maxResults=min(500, max_results - len(ids)))
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                res = self._svc.users().messages().list(**kwargs).execute()
+                ids.extend(m["id"] for m in res.get("messages", []))
+                page_token = res.get("nextPageToken")
+                if not page_token:
+                    break
+            return ids
+        except Exception as e:
+            logger.error("gmail_list_messages_error", query=query, error=str(e))
+            return []
+
     def batch_delete(self, message_ids: list[str]) -> dict:
         """Permanently delete multiple messages (bypasses trash). Use for spam."""
         if not message_ids:
