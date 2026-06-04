@@ -438,12 +438,25 @@ class TelegramHandlers:
 
         total = result.get("total_cleaned", 0)
         summary = result.get("summary", {})
+        total_errors = sum(v.get("errors", 0) for v in summary.values())
+
+        if total == 0 and total_errors > 0:
+            await update.message.reply_text(
+                "Gmail permissions have changed. Please use /connect\\_google to "
+                "reconnect your account — inbox deletion requires updated access.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
         lines = [f"*Inbox cleaned ✓ — {total:,} emails processed*\n"]
         for cat, res in summary.items():
             count = res.get("deleted", 0) + res.get("count", 0)
+            errs  = res.get("errors", 0)
             if count:
                 verb = "deleted" if cat == "spam" else "archived"
                 lines.append(f"  • {cat.capitalize()}: {count:,} {verb}")
+            elif errs:
+                lines.append(f"  • {cat.capitalize()}: {errs:,} failed — reconnect Google")
         lines.append(f"\nUnread remaining: {stats.get('inbox_unread', '—')}")
         await self._safe_reply(update, "\n".join(lines))
 
