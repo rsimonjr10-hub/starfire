@@ -1113,7 +1113,7 @@ class TelegramHandlers:
         elif isinstance(orders, list):
             lines.append("\n<i>No recent fills.</i>")
 
-        await self._safe_reply(update, "\n".join(lines))
+        await self._safe_reply(update, "\n".join(lines), parse_mode=ParseMode.HTML)
 
     async def _run_brain(self, update: Update, text: str, context: ContextTypes.DEFAULT_TYPE = None) -> None:
         """Route arbitrary text through STARFIRE brain and reply."""
@@ -1298,12 +1298,12 @@ class TelegramHandlers:
 
         await self._run_brain(update, transcript, context)
 
-    async def _safe_reply(self, update: Update, text: str) -> None:
+    async def _safe_reply(self, update: Update, text: str, parse_mode: str = ParseMode.MARKDOWN) -> None:
         if not text:
             return
         chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
         for chunk in chunks:
             try:
-                await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(chunk, parse_mode=parse_mode)
             except Exception:
                 await update.message.reply_text(chunk)
