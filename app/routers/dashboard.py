@@ -30,6 +30,46 @@ from app.integrations.snaptrade import snaptrade
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
+_FALLBACK_URL = "https://starfire-production-3ad8.up.railway.app"
+
+_NO_TOKEN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STARFIRE OS</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#000;color:#f1f5f9;display:flex;align-items:center;
+       justify-content:center;min-height:100vh;margin:0;}
+  .card{background:#0f0f0f;border:1px solid rgba(255,255,255,.1);border-radius:16px;
+        padding:44px 40px;max-width:440px;text-align:center;}
+  .logo{font-size:28px;font-weight:800;letter-spacing:.5px;
+        background:linear-gradient(90deg,#f1f5f9,#e63946);
+        -webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+  .sub{font-size:11px;color:#64748b;letter-spacing:1.5px;text-transform:uppercase;margin-top:4px;}
+  h2{font-size:18px;font-weight:600;margin:28px 0 10px;}
+  p{color:#64748b;font-size:14px;line-height:1.6;margin:0 0 8px;}
+  .cmd{background:#161616;border:1px solid rgba(255,255,255,.1);border-radius:8px;
+       padding:10px 16px;font-family:monospace;font-size:14px;
+       color:#e63946;display:inline-block;margin-top:14px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">⚡ STARFIRE</div>
+  <div class="sub">AI OS</div>
+  <h2>Get Your Dashboard Link</h2>
+  <p>Your dashboard requires a personal access token.</p>
+  <p>Open Telegram and send this command to STARFIRE:</p>
+  <div class="cmd">/mylink</div>
+  <p style="margin-top:20px;font-size:12px;color:#475569;">
+    STARFIRE will reply with your unique, private dashboard URL.
+  </p>
+</div>
+</body>
+</html>"""
+
 
 # ── Auth ───────────────────────────────────────────────────────────────────
 
@@ -52,7 +92,7 @@ async def _get_user(token: str = Query(...)) -> User:
 
 
 def get_dashboard_url(telegram_id: int) -> str:
-    base = settings.telegram_webhook_url.rstrip("/")
+    base = (settings.telegram_webhook_url or _FALLBACK_URL).rstrip("/")
     token = _make_token(telegram_id)
     return f"{base}/dashboard?token={token}"
 
@@ -60,14 +100,20 @@ def get_dashboard_url(telegram_id: int) -> str:
 # ── Frontend ───────────────────────────────────────────────────────────────
 
 @router.get("", response_class=HTMLResponse)
-async def dashboard_page(token: str = Query(...)):
-    """Serve the dashboard HTML — auth validated client-side via the token."""
+async def dashboard_page(token: Optional[str] = Query(default=None)):
+    """Serve the dashboard HTML — auth validated via HMAC token."""
+    if not token:
+        return HTMLResponse(_NO_TOKEN_HTML)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.is_active == True))
         users = result.scalars().all()
         valid = any(hmac.compare_digest(_make_token(u.telegram_id), token) for u in users)
     if not valid:
-        return HTMLResponse("<h1>Invalid token</h1>", status_code=403)
+        return HTMLResponse(_NO_TOKEN_HTML.replace("Get Your Dashboard Link", "Invalid Token")
+                            .replace("Your dashboard requires a personal access token.",
+                                     "This link is invalid or has expired."),
+                            status_code=403)
 
     from app.static.dashboard_html import DASHBOARD_HTML
     return HTMLResponse(DASHBOARD_HTML.replace("__TOKEN__", token))
