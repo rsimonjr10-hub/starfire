@@ -75,6 +75,10 @@ Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
 - "delete that email" / "trash it" → DELETE_EMAIL
 - "mark as read" → MARK_READ
 - "check my inbox" / "any new emails" → GET_EMAILS
+- "how many spam/promo emails" / "inbox stats" → GET_INBOX_STATS
+- "clean my spam" / "delete spam" / "clear spam folder" → CLEAN_SPAM
+- "clean my promotions" / "archive promos" / "delete promotional emails" → CLEAN_PROMOTIONS (clean_action="archive" by default; use "delete" only if user explicitly says delete)
+- "clean my inbox" / "organize my inbox" / "tidy up my email" / "inbox cleanup" → ORGANIZE_INBOX (deletes spam + archives promotions)
 - "update my P/L" / "log trade" / "I made/lost $X on..." → UPDATE_SHEET
 - "what did I make today" / "P/L summary" → GET_SHEET_PL
 - "make/create a sheet called X" → CREATE_SHEET (then immediately follow with SHEET_FORMAT style="pl")
@@ -250,6 +254,26 @@ Examples of correct ACTION MODE responses:
 **MARK_READ** — mark email as read
 ```json
 {"action": "MARK_READ", "message_id": "18a1b2c3d4e5f6g7"}
+```
+
+**GET_INBOX_STATS** — show counts per Gmail category (spam, promotions, social, updates, inbox)
+```json
+{"action": "GET_INBOX_STATS"}
+```
+
+**CLEAN_SPAM** — permanently delete all messages in the spam folder
+```json
+{"action": "CLEAN_SPAM", "max_messages": 500}
+```
+
+**CLEAN_PROMOTIONS** — archive or delete a Gmail category. category: promotions|social|updates|forums. clean_action: archive (default, safe) | delete
+```json
+{"action": "CLEAN_PROMOTIONS", "category": "promotions", "clean_action": "archive", "max_messages": 200}
+```
+
+**ORGANIZE_INBOX** — full inbox organization: delete spam + archive promotions in one pass. rules overrides defaults.
+```json
+{"action": "ORGANIZE_INBOX", "rules": {"delete_spam": true, "archive_promotions": true, "archive_social": false, "archive_updates": false}}
 ```
 
 **SEARCH_DRIVE** — search Google Drive

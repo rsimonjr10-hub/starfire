@@ -81,6 +81,7 @@ class TelegramHandlers:
             "/cfo — Run CFO financial analysis agent\n\n"
             "<b>Gmail &amp; Drive</b>\n"
             "/inbox — Unread emails\n"
+            "/clean_inbox — Delete spam + archive promotions\n"
             "/search_email [query] — Search emails\n"
             "/drive [query] — Search Google Drive\n"
             "/connect_google — Link your Google account\n\n"
@@ -375,6 +376,75 @@ class TelegramHandlers:
                 f"   From: {m.get('from','')}\n"
                 f"   _{m.get('snippet','')[:100]}_"
             )
+        await self._safe_reply(update, "\n".join(lines))
+
+    async def cmd_clean_inbox(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Inbox stats + full clean: delete spam, archive promotions."""
+        user = await self._get_or_create_user(update)
+        if not user.google_token_json:
+            await update.message.reply_text(
+                "Gmail not connected. Use /connect\\_google to link your account.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        await update.message.chat.send_action("typing")
+        try:
+            from app.integrations.gmail_service import GmailService
+            from app.services.email_organizer import get_inbox_stats, organize_inbox
+            gmail = GmailService(user.google_token_json)
+            stats = get_inbox_stats(gmail)
+        except Exception as e:
+            await update.message.reply_text(f"Could not reach Gmail: {e}")
+            return
+
+        spam_count  = stats.get("spam", 0)
+        promo_count = stats.get("promotions", 0)
+        total_dirty = spam_count + promo_count
+
+        if total_dirty == 0:
+            await update.message.reply_text(
+                f"*Inbox is clean* ✓\n\nUnread: {stats.get('inbox_unread',0)} · Total inbox: {stats.get('inbox_total',0)}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        preview = (
+            f"*Inbox Cleanup Preview*\n\n"
+            f"  Spam: {spam_count:,} → will be permanently deleted\n"
+            f"  Promotions: {promo_count:,} → will be archived\n\n"
+            f"Cleaning now…"
+        )
+        await update.message.reply_text(preview, parse_mode=ParseMode.MARKDOWN)
+        await update.message.chat.send_action("typing")
+
+        try:
+            result = organize_inbox(gmail)
+        except Exception as e:
+            await update.message.reply_text(f"Cleanup error: {e}")
+            return
+
+        # Persist refreshed token if needed
+        if gmail.current_token_json != user.google_token_json:
+            from app.database import AsyncSessionLocal
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as session:
+                from sqlalchemy import select as _sel
+                from app.models.user import User as _User
+                db_user = (await session.execute(_sel(_User).where(_User.id == user.id))).scalar_one_or_none()
+                if db_user:
+                    db_user.google_token_json = gmail.current_token_json
+                    await session.commit()
+
+        total = result.get("total_cleaned", 0)
+        summary = result.get("summary", {})
+        lines = [f"*Inbox cleaned ✓ — {total:,} emails processed*\n"]
+        for cat, res in summary.items():
+            count = res.get("deleted", 0) + res.get("count", 0)
+            if count:
+                verb = "deleted" if cat == "spam" else "archived"
+                lines.append(f"  • {cat.capitalize()}: {count:,} {verb}")
+        lines.append(f"\nUnread remaining: {stats.get('inbox_unread', '—')}")
         await self._safe_reply(update, "\n".join(lines))
 
     async def cmd_search_email(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

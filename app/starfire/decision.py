@@ -38,6 +38,8 @@ GOOGLE_ACTIONS = {
     "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
     "DRAFT_EMAIL", "SEND_DRAFT", "LIST_DRAFTS", "DELETE_DRAFT",
     "REPLY_EMAIL", "ARCHIVE_EMAIL", "DELETE_EMAIL", "MARK_READ",
+    # Inbox organization
+    "GET_INBOX_STATS", "CLEAN_SPAM", "CLEAN_PROMOTIONS", "ORGANIZE_INBOX",
     # Drive / Docs
     "SEARCH_DRIVE", "READ_DOC", "CREATE_DOC",
     # Calendar
@@ -967,6 +969,64 @@ class DecisionEngine:
                 message_id = action.get("message_id", "")
                 ok = gmail.mark_read(message_id) if message_id else False
                 return "Marked as read ✓" if ok else "Couldn't mark — check the message ID."
+
+            # ── Inbox organisation ─────────────────────────────────────────
+
+            if action_type == "GET_INBOX_STATS":
+                from app.services.email_organizer import get_inbox_stats
+                stats = get_inbox_stats(gmail)
+                lines = ["*Inbox Stats*\n"]
+                label_map = {
+                    "inbox_unread": "Unread",
+                    "inbox_total":  "Total inbox",
+                    "spam":         "Spam",
+                    "promotions":   "Promotions",
+                    "social":       "Social",
+                    "updates":      "Updates",
+                    "forums":       "Forums",
+                }
+                for key, label in label_map.items():
+                    count = stats.get(key, 0)
+                    if count:
+                        lines.append(f"  {label}: {count:,}")
+                return "\n".join(lines)
+
+            if action_type == "CLEAN_SPAM":
+                from app.services.email_organizer import clean_spam
+                result = clean_spam(gmail, max_messages=action.get("max_messages", 500))
+                deleted = result.get("deleted", 0)
+                if deleted == 0:
+                    return result.get("message", "Spam folder is already empty.")
+                return f"Spam cleaned ✓ — {deleted:,} message{'s' if deleted != 1 else ''} permanently deleted."
+
+            if action_type == "CLEAN_PROMOTIONS":
+                from app.services.email_organizer import clean_category
+                cat    = action.get("category", "promotions")
+                act    = action.get("clean_action", "archive")
+                result = clean_category(gmail, cat, act, action.get("max_messages", 200))
+                if "error" in result:
+                    return result["error"]
+                count = result.get("count", 0)
+                verb  = "archived" if result.get("action") == "archived" else "deleted"
+                if count == 0:
+                    return result.get("message", f"No {cat} emails found.")
+                return f"{cat.capitalize()} cleaned ✓ — {count:,} email{'s' if count != 1 else ''} {verb}."
+
+            if action_type == "ORGANIZE_INBOX":
+                from app.services.email_organizer import organize_inbox
+                rules  = action.get("rules", {})
+                result = organize_inbox(gmail, rules=rules if rules else None)
+                total  = result.get("total_cleaned", 0)
+                summary = result.get("summary", {})
+                lines  = [f"*Inbox organized ✓ — {total:,} emails cleaned*\n"]
+                for cat, res in summary.items():
+                    count = res.get("deleted", 0) + res.get("count", 0)
+                    if count:
+                        verb = "deleted" if cat == "spam" else "archived"
+                        lines.append(f"  • {cat.capitalize()}: {count:,} {verb}")
+                if total == 0:
+                    return "Inbox is already clean — nothing to do."
+                return "\n".join(lines)
 
             if action_type == "SEARCH_DRIVE":
                 files = drive.search(action.get("query", ""))
