@@ -11,6 +11,7 @@ from app.database import AsyncSessionLocal
 from app.models.user import User
 from app.services.automation_runner import evaluate_all
 from app.telegram.bot import send_notification
+from app.monitoring.sentinel import sentinel
 
 logger = structlog.get_logger(__name__)
 
@@ -27,7 +28,7 @@ class AutomationWorker:
             try:
                 await self._tick()
             except Exception as e:
-                logger.error("automation_worker_error", error=str(e))
+                await sentinel.capture(e, category="automation_worker", context={"phase": "tick"})
             await asyncio.sleep(self.interval)
 
     async def stop(self):
@@ -60,7 +61,7 @@ class AutomationWorker:
                         # Email watches: check Gmail for pending watches
                         await self._check_email_watches(session, user_fresh, now)
             except Exception as e:
-                logger.error("automation_user_error", user_id=user.id, error=str(e))
+                await sentinel.capture(e, category="automation_worker.user", context={"user_id": user.id})
 
     async def _maybe_nudge(self, session, user, now: datetime) -> None:
         """Send a proactive check-in if the user has been silent for 8+ business hours."""
@@ -92,7 +93,7 @@ class AutomationWorker:
             await session.commit()
             logger.info("idle_nudge_sent", user_id=user.id)
         except Exception as e:
-            logger.error("idle_nudge_error", user_id=user.id, error=str(e))
+            await sentinel.capture(e, category="automation_worker.idle_nudge", context={"user_id": user.id})
 
     async def _check_email_watches(self, session, user, now: datetime) -> None:
         """Poll Gmail for each active email watch; notify and deactivate on match."""
@@ -116,7 +117,7 @@ class AutomationWorker:
             from app.integrations.gmail_service import GmailService
             gmail = GmailService(user.google_token_json)
         except Exception as e:
-            logger.error("email_watch_gmail_init_error", user_id=user.id, error=str(e))
+            await sentinel.capture(e, category="automation_worker.email_watch_init", context={"user_id": user.id})
             return
 
         for watch in watches:
@@ -153,4 +154,4 @@ class AutomationWorker:
                 )
                 logger.info("email_watch_triggered", user_id=user.id, watch_id=watch.id)
             except Exception as e:
-                logger.error("email_watch_check_error", user_id=user.id, watch_id=watch.id, error=str(e))
+                await sentinel.capture(e, category="automation_worker.email_watch_check", context={"user_id": user.id, "watch_id": watch.id})

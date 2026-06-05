@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models import User, PortfolioState
 from app.events.publisher import EventPublisher
+from app.monitoring.sentinel import sentinel
 
 logger = structlog.get_logger(__name__)
 
@@ -28,7 +29,7 @@ class MarketWorker:
             try:
                 await self._tick()
             except Exception as e:
-                logger.error("market_worker_error", error=str(e))
+                await sentinel.capture(e, category="market_worker", context={"phase": "tick"})
             await asyncio.sleep(self.interval)
 
     async def stop(self) -> None:

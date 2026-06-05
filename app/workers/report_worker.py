@@ -16,6 +16,7 @@ from app.integrations.lumiscapital import lumiscapital, formatter
 from app.integrations.osiris_telegram import osiris_telegram
 from app.integrations.osiris_bridge import osiris_bridge
 from app.telegram.bot import send_notification
+from app.monitoring.sentinel import sentinel
 
 logger = structlog.get_logger(__name__)
 
@@ -61,7 +62,7 @@ class ReportWorker:
                 focus = await compute_daily_focus(session, user.id)
             return [format_daily_focus(focus, user.first_name or "")]
         except Exception as e:
-            logger.error("morning_focus_error", user_id=user.id, error=str(e))
+            await sentinel.capture(e, category="report_worker.morning_focus", context={"user_id": user.id})
             return []
 
     async def _morning_briefing(self) -> list[str]:
@@ -87,7 +88,7 @@ class ReportWorker:
             if news:
                 sections.append(formatter.format_news(news, "Top Stories"))
         except Exception as e:
-            logger.error("morning_market_data_error", error=str(e))
+            await sentinel.capture(e, category="report_worker.market_data", context={"phase": "morning_briefing"})
 
         return sections
 
@@ -170,7 +171,7 @@ class ReportWorker:
             if indicators:
                 sections.append(formatter.format_macro_summary(indicators, treasury))
         except Exception as e:
-            logger.error("weekly_macro_error", error=str(e))
+            await sentinel.capture(e, category="report_worker.weekly_macro")
         return sections
 
     # ─────────────────────────────────────────────────────────────────────
@@ -207,7 +208,7 @@ class ReportWorker:
                     await send_notification(user.telegram_id, section)
                     await asyncio.sleep(0.3)
                 except Exception as e:
-                    logger.error("broadcast_error", user_id=user.id, error=str(e))
+                    await sentinel.capture(e, category="report_worker.broadcast", context={"user_id": user.id})
 
     async def _broadcast_per_user(self, builder) -> None:
         async with AsyncSessionLocal() as session:
@@ -221,4 +222,4 @@ class ReportWorker:
                     await send_notification(user.telegram_id, section)
                     await asyncio.sleep(0.3)
             except Exception as e:
-                logger.error("per_user_broadcast_error", user_id=user.id, error=str(e))
+                await sentinel.capture(e, category="report_worker.per_user_broadcast", context={"user_id": user.id})

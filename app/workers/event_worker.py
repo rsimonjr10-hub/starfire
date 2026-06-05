@@ -1,6 +1,7 @@
 import structlog
 from app.events.consumer import EventConsumer
 from app.events.types import EventType
+from app.monitoring.sentinel import sentinel
 
 logger = structlog.get_logger(__name__)
 
@@ -69,4 +70,4 @@ class EventWorker:
                 if user:
                     await send_notification(user.telegram_id, message)
         except Exception as e:
-            logger.error("notify_user_error", user_id=user_id, error=str(e))
+            await sentinel.capture(e, category="event_worker", context={"user_id": user_id})

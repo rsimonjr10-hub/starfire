@@ -385,7 +385,25 @@ async def run_work_background(run_id: int, user_id: int, telegram_id: int, task:
             await asyncio.sleep(0.3)
 
     except Exception as e:
-        logger.error("work_agent_background_error", user_id=user_id, error=str(e))
+        from app.monitoring.sentinel import sentinel
+        await sentinel.capture(
+            e, category="agent.work.background",
+            context={"user_id": user_id, "run_id": run_id, "task": task[:200]},
+            user_telegram_id=telegram_id,
+        )
+        # Mark the run failed so it doesn't sit "running" forever
+        try:
+            async with AsyncSessionLocal() as db:
+                run = (await db.execute(
+                    select(AgentRun).where(AgentRun.id == run_id)
+                )).scalar_one_or_none()
+                if run and run.status == "running":
+                    run.status = "failed"
+                    run.error = str(e)
+                    run.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+        except Exception:
+            pass
         try:
             from app.telegram.bot import send_notification
             await send_notification(telegram_id, f"Work session failed: {e}")

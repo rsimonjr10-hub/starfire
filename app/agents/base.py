@@ -51,7 +51,12 @@ class BaseAgent(ABC):
             run.output_data = {k: v for k, v in result.items() if k != "report_text"}
             run.report_text = result.get("report_text", "")
         except Exception as e:
-            logger.error("agent_run_failed", agent=self.name, error=str(e))
+            from app.monitoring.sentinel import sentinel
+            await sentinel.capture(
+                e, category=f"agent.{self.name}",
+                context={"user_id": user.id, "trigger": trigger},
+                user_telegram_id=user.telegram_id,
+            )
             run.status = "failed"
             run.error = str(e)
             result = {"report_text": f"Agent {self.name} failed: {e}"}
