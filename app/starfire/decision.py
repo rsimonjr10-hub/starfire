@@ -38,7 +38,10 @@ GOOGLE_ACTIONS = {
     # Gmail
     "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
     "DRAFT_EMAIL", "SEND_DRAFT", "LIST_DRAFTS", "DELETE_DRAFT",
-    "REPLY_EMAIL", "ARCHIVE_EMAIL", "DELETE_EMAIL", "MARK_READ",
+    "REPLY_EMAIL", "ARCHIVE_EMAIL", "ARCHIVE_EMAILS", "DELETE_EMAIL",
+    "DELETE_EMAILS", "MARK_READ",
+    # Folders / labels — full access to every folder
+    "LIST_FOLDERS", "GET_FOLDER", "READ_FOLDER",
     # Inbox organization
     "GET_INBOX_STATS", "CLEAN_SPAM", "CLEAN_PROMOTIONS", "ORGANIZE_INBOX",
     # Drive / Docs
@@ -1050,6 +1053,25 @@ class DecisionEngine:
                 ok = gmail.archive_email(message_id) if message_id else False
                 return "Archived ✓" if ok else "Couldn't archive — check the message ID."
 
+            if action_type == "ARCHIVE_EMAILS":
+                # Bulk archive by Gmail query (e.g. from:sender, subject:topic).
+                # Removes from inbox, keeps in All Mail.
+                query = action.get("query", "").strip()
+                if not query:
+                    return "Need a search query to archive by (e.g. from:sender)."
+                max_n = int(action.get("max", 200))
+                matches = gmail.search(query, max_results=max_n)
+                ids = [m["id"] for m in matches if m.get("id")]
+                if not ids:
+                    return f"No emails matched `{query}` — nothing to archive."
+                result = gmail.batch_archive(ids)
+                archived = result.get("archived", 0) if isinstance(result, dict) else len(ids)
+                errors = result.get("errors", 0) if isinstance(result, dict) else 0
+                if archived == 0 and errors:
+                    return f"Couldn't archive — Gmail rejected the request ({errors} error(s)). You may need to /connect_google again."
+                suffix = f" ({errors} failed)" if errors else ""
+                return f"Archived {archived} email(s) matching `{query}` ✓{suffix}"
+
             if action_type == "DELETE_EMAIL":
                 message_id = action.get("message_id", "")
                 ok = gmail.delete_email(message_id) if message_id else False
@@ -1074,6 +1096,42 @@ class DecisionEngine:
                 message_id = action.get("message_id", "")
                 ok = gmail.mark_read(message_id) if message_id else False
                 return "Marked as read ✓" if ok else "Couldn't mark — check the message ID."
+
+            # ── Folders / labels (full access to every folder) ─────────────
+
+            if action_type == "LIST_FOLDERS":
+                labels = gmail.list_labels(with_counts=True)
+                if not labels:
+                    return "No folders found."
+                system = [l for l in labels if l.get("type") == "system"]
+                user_labels = [l for l in labels if l.get("type") != "system"]
+                lines = ["*Your Gmail Folders*\n"]
+                def _fmt(group, title):
+                    if not group:
+                        return
+                    lines.append(f"\n*{title}*")
+                    for l in sorted(group, key=lambda x: x["name"]):
+                        cnt = ""
+                        if l.get("total") is not None:
+                            unread = f", {l['unread']} unread" if l.get("unread") else ""
+                            cnt = f" — {l['total']}{unread}"
+                        lines.append(f"• {l['name'].title() if l.get('type')=='system' else l['name']}{cnt}")
+                _fmt(system, "System")
+                _fmt(user_labels, "Labels")
+                return "\n".join(lines)
+
+            if action_type in ("GET_FOLDER", "READ_FOLDER"):
+                folder = action.get("folder", "").strip()
+                if not folder:
+                    return "Which folder? e.g. Sent, Spam, Trash, or a label name."
+                limit = int(action.get("limit", 15))
+                messages = gmail.list_in_folder(folder, max_results=limit)
+                if not messages:
+                    return f"No emails in *{folder}*."
+                lines = [f"*{folder.title()}* — {len(messages)} message(s)\n"]
+                for i, m in enumerate(messages, 1):
+                    lines.append(f"{i}. *{m.get('subject','(no subject)')}*\n   From: {m.get('from','')}\n   _{m.get('snippet','')[:100]}_")
+                return "\n".join(lines)
 
             # ── Inbox organisation ─────────────────────────────────────────
 

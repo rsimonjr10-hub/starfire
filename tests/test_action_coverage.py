@@ -57,8 +57,17 @@ def test_new_features_are_wired():
     handled = _handled_actions()
     for action in ("WATCH_EMAIL", "START_WORK", "COMPUTE_MATH", "UNDO",
                    "GET_DAILY_FOCUS", "ANALYZE_DECISION", "BATCH",
-                   "DELETE_EMAILS"):
+                   "DELETE_EMAILS", "ARCHIVE_EMAILS", "LIST_FOLDERS",
+                   "GET_FOLDER"):
         assert action in handled, f"{action} lost its handler"
+
+
+def test_email_actions_are_routed_to_google():
+    """Bulk/folder email actions must be in GOOGLE_ACTIONS or they never run."""
+    from app.starfire.decision import GOOGLE_ACTIONS
+    for action in ("DELETE_EMAILS", "ARCHIVE_EMAILS", "LIST_FOLDERS",
+                   "GET_FOLDER", "READ_FOLDER"):
+        assert action in GOOGLE_ACTIONS, f"{action} not routed to Google handler"
 
 
 # ── 2. Brain extracts action JSON even when mixed with prose ──────────────────

@@ -341,7 +341,7 @@ class GmailService:
             return True
         except Exception as e:
             logger.error("gmail_archive_error", error=str(e))
-            return False
+            raise
 
     def delete_email(self, message_id: str) -> bool:
         try:
@@ -362,6 +362,70 @@ class GmailService:
             return False
 
     # ── BULK OPERATIONS ────────────────────────────────────────────────────
+
+    # ── FOLDERS / LABELS (full access to every folder) ─────────────────────
+
+    # Friendly name → Gmail system label id. None = All Mail (no label filter).
+    _SYSTEM_FOLDERS = {
+        "inbox": "INBOX", "sent": "SENT", "draft": "DRAFT", "drafts": "DRAFT",
+        "spam": "SPAM", "junk": "SPAM", "trash": "TRASH", "bin": "TRASH",
+        "deleted": "TRASH", "starred": "STARRED", "important": "IMPORTANT",
+        "unread": "UNREAD", "scheduled": "SCHEDULED", "snoozed": "SNOOZED",
+        "all": None, "all mail": None, "everything": None,
+        "social": "CATEGORY_SOCIAL", "promotions": "CATEGORY_PROMOTIONS",
+        "promos": "CATEGORY_PROMOTIONS", "updates": "CATEGORY_UPDATES",
+        "forums": "CATEGORY_FORUMS", "personal": "CATEGORY_PERSONAL",
+    }
+
+    def list_labels(self, with_counts: bool = True) -> list[dict]:
+        """Return every Gmail label/folder (system + user-created), with counts."""
+        try:
+            res = self._svc.users().labels().list(userId="me").execute()
+            out = []
+            for lb in res.get("labels", []):
+                entry = {"id": lb["id"], "name": lb["name"], "type": lb.get("type", "user")}
+                if with_counts:
+                    try:
+                        detail = self._svc.users().labels().get(userId="me", id=lb["id"]).execute()
+                        entry["total"] = detail.get("messagesTotal", 0)
+                        entry["unread"] = detail.get("messagesUnread", 0)
+                    except Exception:
+                        entry["total"] = entry["unread"] = None
+                out.append(entry)
+            return out
+        except Exception as e:
+            logger.error("gmail_list_labels_error", error=str(e))
+            raise
+
+    def resolve_folder(self, folder: str):
+        """Map a friendly folder/label name to a Gmail label id (or None = All Mail)."""
+        f = (folder or "").strip().lower()
+        if f in self._SYSTEM_FOLDERS:
+            return self._SYSTEM_FOLDERS[f]
+        # User-created label, matched case-insensitively by name
+        try:
+            res = self._svc.users().labels().list(userId="me").execute()
+            for lb in res.get("labels", []):
+                if lb["name"].lower() == f:
+                    return lb["id"]
+        except Exception:
+            pass
+        return folder  # fall back to the raw value
+
+    def list_in_folder(self, folder: str, max_results: int = 20) -> list[dict]:
+        """List message summaries in any folder/label (Sent, Spam, Trash, custom…)."""
+        label_id = self.resolve_folder(folder)
+        try:
+            kwargs = dict(userId="me", maxResults=min(100, max_results))
+            if label_id:
+                kwargs["labelIds"] = [label_id]
+            else:
+                kwargs["q"] = "in:anywhere"  # All Mail incl. spam/trash
+            res = self._svc.users().messages().list(**kwargs).execute()
+            return [self._fetch_summary(m["id"]) for m in res.get("messages", [])]
+        except Exception as e:
+            logger.error("gmail_list_in_folder_error", folder=folder, error=str(e))
+            raise
 
     def list_category(self, category: str, max_results: int = 200) -> list[str]:
         """Return message IDs in a Gmail category. category: spam|promotions|social|updates|forums"""
