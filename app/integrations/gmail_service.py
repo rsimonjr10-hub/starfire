@@ -637,7 +637,7 @@ class CalendarService:
             return created
         except Exception as e:
             logger.error("calendar_create_error", error=str(e))
-            return None
+            raise
 
     def update_event(
         self,
@@ -670,7 +670,7 @@ class CalendarService:
             ).execute()
         except Exception as e:
             logger.error("calendar_update_error", event_id=event_id, error=str(e))
-            return None
+            raise
 
     def delete_event(self, event_id: str) -> bool:
         try:

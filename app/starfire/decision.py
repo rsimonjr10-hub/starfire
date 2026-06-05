@@ -802,7 +802,10 @@ class DecisionEngine:
             "RefreshError" in name
             or "invalid_grant" in msg
             or "token has been expired" in msg
-            or "Token has been revoked" in msg
+            or "token has been revoked" in msg
+            or "insufficient authentication scopes" in msg
+            or "request had insufficient authentication scopes" in msg
+            or ("httperror" in name.lower() and "401" in msg)
         )
 
     async def _handle_google_action(self, user: User, action: dict, history: list, context: Optional[str], attachments: Optional[list] = None) -> str:
