@@ -17,6 +17,7 @@ from app.starfire.prompts import (
     BUSINESS_CONTEXT_TEMPLATE,
 )
 from app.models import User, PortfolioState, Task, Goal, Bill, BotTicket, UserMemory
+from app.models.agent_run import AgentRun
 from app.risk.engine import RiskEngine
 from app.osiris.executor import OsirisExecutor
 from app.events.publisher import EventPublisher
@@ -238,6 +239,62 @@ class DecisionEngine:
             return await self._run_agent(user, "cfo", action)
         if action_type == "RUN_RESEARCH_AGENT":
             return await self._run_agent(user, "research", action)
+
+        # ── WORK AGENT ───────────────────────────────────────────────────
+        if action_type == "START_WORK":
+            import asyncio
+            from app.agents.work_agent import run_work_background
+            task = action.get("task", "").strip()
+            if not task:
+                return "What should I work on? Give me a task or question."
+            run = AgentRun(
+                user_id=user.id,
+                agent_name="work",
+                trigger="telegram",
+                input_data={"task": task},
+                status="running",
+            )
+            self.db.add(run)
+            await self.db.flush()
+            run_id = run.id
+            await self.db.commit()
+            asyncio.create_task(
+                run_work_background(run_id, user.id, user.telegram_id, task)
+            )
+            return (
+                f"On it. I'll work on this in the background and send you the full report when done.\n\n"
+                f"*Task:* {task}\n"
+                f"_Session #{run_id} — use /workstatus to check progress._"
+            )
+
+        if action_type == "WORK_STATUS":
+            from sqlalchemy import select as sa_select
+            result = await self.db.execute(
+                sa_select(AgentRun)
+                .where(AgentRun.user_id == user.id, AgentRun.agent_name == "work")
+                .order_by(AgentRun.started_at.desc())
+                .limit(5)
+            )
+            runs = result.scalars().all()
+            if not runs:
+                return "No work sessions found. Use /work [task] to start one."
+            lines = ["*Recent Work Sessions*\n"]
+            for r in runs:
+                elapsed = ""
+                if r.completed_at and r.started_at:
+                    secs = int((r.completed_at - r.started_at).total_seconds())
+                    elapsed = f" · {secs}s"
+                task_label = (r.input_data or {}).get("task", "")[:60]
+                lines.append(f"#{r.id} *{r.status}*{elapsed}\n  _{task_label}_")
+            return "\n\n".join(lines)
+
+        if action_type == "COMPUTE_MATH":
+            from app.agents.work_agent import compute_math
+            expression = action.get("expression", "").strip()
+            if not expression:
+                return "Provide a math expression or equation."
+            result = compute_math(expression)
+            return f"*Math*\n`{expression}`\n\nResult: `{result}`"
 
         # ── DAILY FOCUS & DECISION BRAIN ────────────────────────────────
         if action_type == "GET_DAILY_FOCUS":

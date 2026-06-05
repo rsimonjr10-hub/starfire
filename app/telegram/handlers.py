@@ -1215,6 +1215,28 @@ class TelegramHandlers:
 
         await self._safe_reply(update, "\n".join(lines))
 
+    async def cmd_work(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /work [task] — run an autonomous background research/analysis session."""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "*STARFIRE Work Agent*\n\n"
+                "Usage: `/work [task]`\n\n"
+                "Examples:\n"
+                "• `/work research mortgage refinancing and calculate my break-even`\n"
+                "• `/work analyze my spending and find where I'm overspending`\n"
+                "• `/work what should I know about starting an LLC in Florida`\n\n"
+                "_I'll work on it in the background and send you the full report._",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        task = " ".join(args)
+        await self._run_brain(update, f"/work {task}")
+
+    async def cmd_workstatus(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Check status of background work sessions."""
+        await self._run_brain(update, "work session status")
+
     async def cmd_cfo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Run the CFO agent for financial analysis."""
         await self._run_brain(update, "run the CFO agent and give me a full financial analysis")

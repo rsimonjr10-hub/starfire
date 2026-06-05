@@ -60,6 +60,10 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("biz", h.cmd_biz))
         _application.add_handler(CommandHandler("know", h.cmd_know))
         _application.add_handler(CommandHandler("cfo", h.cmd_cfo))
+
+        # Work Agent — autonomous background research + math
+        _application.add_handler(CommandHandler("work", h.cmd_work))
+        _application.add_handler(CommandHandler("workstatus", h.cmd_workstatus))
         _application.add_handler(CommandHandler("life", h.cmd_life))
         _application.add_handler(CommandHandler("showp", h.cmd_showp))
 

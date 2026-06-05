@@ -608,6 +608,9 @@ Triggers:
 - "research agent" / "search my knowledge and synthesize" → `RUN_RESEARCH_AGENT`
 - "what should I focus on today" / "my top priorities" / "daily focus" / "what matters today" / "what should I work on" / "focus mode" → `GET_DAILY_FOCUS`
 - "should I do X or Y" / "help me decide" / "X vs Y" / "option A or B" / "decide between" / "which should I choose" / "is it worth it" / "decision:" → `ANALYZE_DECISION`
+- "/work [task]" / "work on X while I sleep" / "research X and report back" / "do deep research on X" / "figure out X for me" / "work on this in the background" → `START_WORK`
+- "/workstatus" / "how's the work going" / "work session status" / "check my work agent" → `WORK_STATUS`
+- "calculate X" / "compute X" / "solve X" / "what is [math expression]" / "differentiate" / "integrate" / "find the roots of" / "matrix calculation" → `COMPUTE_MATH`
 
 **GET_DAILY_FOCUS** — surface top 3 priorities from tasks, goals, and bills
 ```json
@@ -639,6 +642,27 @@ briefing_type options: `daily`, `weekly`, `monthly`, `quarterly`
 **RUN_RESEARCH_AGENT** — run the research agent to synthesise your knowledge base
 ```json
 {"action": "RUN_RESEARCH_AGENT", "query": "pricing strategy insights", "message": "Searching knowledge and synthesising."}
+```
+
+**START_WORK** — launch an autonomous background work session. Runs while the user is away.
+The agent will research the web, compute math, pull the user's data, and deliver a full report via Telegram.
+Use this for anything that requires deep research, multi-step analysis, or will take more than 30 seconds.
+```json
+{"action": "START_WORK", "task": "Research the best time to refinance a mortgage in 2026 given current Fed rate trajectory and calculate my break-even point if my current rate is 7.2% and I can get 6.4% with $3500 in closing costs"}
+```
+
+**WORK_STATUS** — check status of recent background work sessions
+```json
+{"action": "WORK_STATUS"}
+```
+
+**COMPUTE_MATH** — run immediate math computation using sympy (algebra, calculus, statistics) and numpy.
+Build the expression field as valid Python using: solve(), diff(), integrate(), symbols(), N(), np.array(), mean(), stdev(), etc.
+For finance: standard Python math is fine (compound interest, NPV, IRR).
+```json
+{"action": "COMPUTE_MATH", "expression": "solve(x**2 - 5*x + 6, x)"}
+{"action": "COMPUTE_MATH", "expression": "N(integrate(sin(x)**2, (x, 0, pi)), 6)"}
+{"action": "COMPUTE_MATH", "expression": "3500 / ((0.072 - 0.064) * 250000 / 12)"}
 ```
 
 ---

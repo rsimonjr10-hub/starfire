@@ -24,3 +24,6 @@ websockets==12.0
 pytest==8.2.0
 pytest-asyncio==0.23.6
 sentry-sdk[fastapi]==2.5.1
+sympy==1.13.1
+numpy==1.26.4
+beautifulsoup4==4.12.3
