@@ -329,7 +329,24 @@ class DecisionEngine:
         if action_type == "ANALYZE_DECISION":
             return action.get("message", "I need more context. What options are you weighing?")
 
-        return action.get("message", "Action processed.")
+        # Reached ONLY when no handler matched — an unrouted/unknown action.
+        # NEVER return the model's optimistic "message" here: doing so makes
+        # STARFIRE claim it did something (e.g. "Archived ✓") it never executed.
+        logger.warning("unhandled_action", action_type=action_type)
+        try:
+            from app.monitoring.sentinel import sentinel
+            await sentinel.capture(
+                RuntimeError(f"Unhandled action: {action_type}"),
+                category="unhandled_action",
+                context={"action_type": action_type, "user_id": user.id},
+            )
+        except Exception:
+            pass
+        return (
+            f"I wasn't able to actually do that — I don't have a working handler "
+            f"for `{action_type}`, so nothing was executed. I've flagged it. "
+            "Tell me again in plain words and I'll route it correctly."
+        )
 
     # ─────────────────────────────────────────────────────────────────────
     # BOT MESSAGING — relay user instructions to LUMISNOVA / OSIRIS
