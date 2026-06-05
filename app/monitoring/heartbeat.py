@@ -33,6 +33,11 @@ def register(name: str, interval_seconds: float) -> None:
         _beats[name] = {"last": time.monotonic(), "interval": interval_seconds, "wall": time.time()}
 
 
+def clear(name: str) -> None:
+    """Remove a worker from the registry (e.g. a transient probe)."""
+    _beats.pop(name, None)
+
+
 def check(slack_factor: float = 2.5) -> dict[str, str]:
     """
     Return {name: status} for every registered worker.

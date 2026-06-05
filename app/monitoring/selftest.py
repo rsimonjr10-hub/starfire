@@ -200,10 +200,17 @@ class SelfTest:
         assert u.preferences["undo"]["id"] == 99
 
     def _check_heartbeats(self):
-        """Heartbeat registry must register and report a fresh beat as ok."""
+        """Heartbeat registry must register and report a fresh beat as ok.
+
+        Uses a transient probe and removes it afterward so it can't linger in
+        the shared registry and trip the health worker's stale-worker alert.
+        """
         from app.monitoring import heartbeat
-        heartbeat.beat("selftest_probe", 1.0)
-        assert heartbeat.check().get("selftest_probe") == "ok"
+        try:
+            heartbeat.beat("selftest_probe", 1.0)
+            assert heartbeat.check().get("selftest_probe") == "ok"
+        finally:
+            heartbeat.clear("selftest_probe")
 
 
 selftest = SelfTest()
