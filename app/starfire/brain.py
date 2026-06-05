@@ -108,19 +108,43 @@ class StarfireBrain:
         """Detect whether STARFIRE returned JSON action or plain chat text."""
         stripped = raw.strip()
 
-        # Try direct JSON parse first
+        # 1. Direct JSON parse (response is pure JSON)
         if stripped.startswith("{"):
             data = self._try_parse_json(stripped)
             if data and "action" in data:
                 logger.info("brain_action_detected", action=data.get("action"), parsed_via="direct_json")
                 return {"type": "action", "content": data, "raw": raw}
 
-        # Try extracting JSON from markdown code block
+        # 2. JSON inside a markdown code block
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
         if match:
             data = self._try_parse_json(match.group(1))
             if data and "action" in data:
                 logger.info("brain_action_detected", action=data.get("action"), parsed_via="code_block")
+                return {"type": "action", "content": data, "raw": raw}
+
+        # 3. JSON embedded in prose (Claude sometimes mixes narrative + action JSON)
+        #    Walk every '{' in the response and try to extract a valid action object.
+        for m in re.finditer(r"\{", stripped):
+            start = m.start()
+            depth = 0
+            end = -1
+            for i, ch in enumerate(stripped[start:], start):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end == -1:
+                continue
+            candidate = stripped[start:end]
+            if '"action"' not in candidate:
+                continue
+            data = self._try_parse_json(candidate)
+            if data and "action" in data:
+                logger.info("brain_action_detected", action=data.get("action"), parsed_via="embedded_json")
                 return {"type": "action", "content": data, "raw": raw}
 
         logger.info("brain_chat_response", preview=stripped[:120])
