@@ -141,3 +141,36 @@ Examples: `solve(x**2-4, x)`, `diff(sin(x)*x**2, x)`, `N(integrate(...), 6)`,
 - [ ] Committed with a clear message (no secrets, no model id)
 - [ ] Pushed to `claude/starfire-ai-os-QWLqi`
 - [ ] PR exists (draft) for record
+
+---
+
+## 🛠️ Critical System Commands
+- Run self-test suite: `python app/monitoring/selftest.py`
+- Full pytest suite: `python3 -m pytest tests/ -q`
+- View execution log: `tail -n 50 starfire_run.log`
+- Database migration (if schema changes): `alembic upgrade head`
+  (Railway runs this automatically at boot via the start command.)
+
+---
+
+## 🧠 Memory & Context Conservation
+- Use precise Search-and-Replace block edits. NEVER rewrite an entire file to
+  change a few lines.
+- Frequently execute the `/clear` command when transitioning between unrelated
+  debugging tasks to wipe accumulated context history.
+
+---
+
+## 🚀 Autonomous Feature Ideation & Logging
+- When creating feature ideas, never dump text arrays into the terminal console.
+  Write them as functional user-stories directly into `IDEAS.md`.
+- Prioritize features utilizing the Model Context Protocol (MCP) or low-latency
+  background-worker structures.
+
+---
+
+## 🛑 Hard Architectural Constraints
+- NEVER force-push to `main` without running `selftest.py` first.
+- If an autonomous code-fix loops or fails 3 consecutive times, stop executing,
+  drop a diagnostic log in `starfire_run.log`, and alert via Telegram. Do not
+  drain tokens trying a 4th time.

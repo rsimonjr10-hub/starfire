@@ -15,6 +15,13 @@ import asyncio
 import structlog
 from datetime import datetime, timezone, timedelta
 
+# Allow `python app/monitoring/selftest.py` to find the `app` package by adding
+# the project root to sys.path when run as a script (not via -m).
+if __package__ in (None, ""):
+    import os
+    import sys
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
 from sqlalchemy import select, func
 
 from app.database import AsyncSessionLocal
@@ -34,7 +41,7 @@ class SelfTest:
         except Exception as e:
             logger.error("selftest_fatal", error=str(e))
 
-    async def run(self) -> dict:
+    async def run(self, alert: bool = True) -> dict:
         checks = [
             ("model.task_query", self._check_task_query),
             ("model.goal_query", self._check_goal_query),
@@ -67,7 +74,8 @@ class SelfTest:
                 + "\n".join(f"• <b>{k}</b>\n  <code>{v[:200]}</code>" for k, v in failures.items())
                 + "\n\nThese code paths will error when a user triggers them."
             )
-            await sentinel._alert(msg)
+            if alert:
+                await sentinel._alert(msg)
             logger.error("selftest_failures", count=len(failures), failures=list(failures.keys()))
         else:
             logger.info("selftest_passed", checks=len(checks))
@@ -214,3 +222,21 @@ class SelfTest:
 
 
 selftest = SelfTest()
+
+
+if __name__ == "__main__":
+    # CLI: `python app/monitoring/selftest.py` — runs all checks and prints a
+    # report instead of alerting Telegram. DB checks fail gracefully if no DB.
+    import asyncio
+
+    results = asyncio.run(selftest.run(alert=False))
+    width = max(len(k) for k in results)
+    print("\nSTARFIRE Self-Test\n" + "=" * (width + 8))
+    failures = 0
+    for name, status in results.items():
+        ok = status == "ok"
+        failures += 0 if ok else 1
+        print(f"{'PASS' if ok else 'FAIL'}  {name.ljust(width)}  {'' if ok else status}")
+    print("=" * (width + 8))
+    print(f"{len(results) - failures}/{len(results)} passed\n")
+    raise SystemExit(1 if failures else 0)
