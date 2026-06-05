@@ -1038,6 +1038,64 @@ class DecisionEngine:
                     return "Inbox is already clean — nothing to do."
                 return "\n".join(lines)
 
+            if action_type == "WATCH_EMAIL":
+                from app.models.email_watch import EmailWatch
+                description = action.get("description", action.get("query", "email"))
+                query = action.get("query", "")
+                if not query:
+                    return "I need a search term to watch for — e.g. from:chris@dealer.com or subject:quote."
+                watch = EmailWatch(
+                    user_id=user.id,
+                    description=description,
+                    query=query,
+                )
+                self.db.add(watch)
+                await self.db.commit()
+                return f"Watching for: *{description}*\nI'll notify you the moment it hits your inbox."
+
+            if action_type == "LIST_EMAIL_WATCHES":
+                from app.models.email_watch import EmailWatch
+                from sqlalchemy import select
+                result = await self.db.execute(
+                    select(EmailWatch)
+                    .where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+                    .order_by(EmailWatch.created_at.desc())
+                )
+                watches = result.scalars().all()
+                if not watches:
+                    return "No active email watches."
+                lines = ["*Active Email Watches*\n"]
+                for w in watches:
+                    lines.append(f"• [{w.id}] *{w.description}*\n  `{w.query}`")
+                return "\n".join(lines)
+
+            if action_type == "CANCEL_EMAIL_WATCH":
+                from app.models.email_watch import EmailWatch
+                from sqlalchemy import select
+                watch_id = action.get("watch_id")
+                if watch_id:
+                    result = await self.db.execute(
+                        select(EmailWatch).where(
+                            EmailWatch.id == int(watch_id),
+                            EmailWatch.user_id == user.id,
+                        )
+                    )
+                    watch = result.scalar_one_or_none()
+                    if watch:
+                        watch.is_active = False
+                        await self.db.commit()
+                        return f"Cancelled watch: *{watch.description}*"
+                    return "Watch not found."
+                # cancel all
+                result = await self.db.execute(
+                    select(EmailWatch).where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+                )
+                watches = result.scalars().all()
+                for w in watches:
+                    w.is_active = False
+                await self.db.commit()
+                return f"Cancelled {len(watches)} email watch(es)."
+
             if action_type == "SEARCH_DRIVE":
                 files = drive.search(action.get("query", ""))
                 if not files:

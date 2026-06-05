@@ -56,6 +56,9 @@ class AutomationWorker:
 
                         # Proactive idle nudge: if silent for 8+ hours during business hours
                         await self._maybe_nudge(session, user_fresh, now)
+
+                        # Email watches: check Gmail for pending watches
+                        await self._check_email_watches(session, user_fresh, now)
             except Exception as e:
                 logger.error("automation_user_error", user_id=user.id, error=str(e))
 
@@ -90,3 +93,64 @@ class AutomationWorker:
             logger.info("idle_nudge_sent", user_id=user.id)
         except Exception as e:
             logger.error("idle_nudge_error", user_id=user.id, error=str(e))
+
+    async def _check_email_watches(self, session, user, now: datetime) -> None:
+        """Poll Gmail for each active email watch; notify and deactivate on match."""
+        if not user.google_token_json:
+            return
+
+        from sqlalchemy import select as sa_select
+        from app.models.email_watch import EmailWatch
+
+        result = await session.execute(
+            sa_select(EmailWatch).where(
+                EmailWatch.user_id == user.id,
+                EmailWatch.is_active == True,
+            )
+        )
+        watches = result.scalars().all()
+        if not watches:
+            return
+
+        try:
+            from app.integrations.gmail_service import GmailService
+            gmail = GmailService(user.google_token_json)
+        except Exception as e:
+            logger.error("email_watch_gmail_init_error", user_id=user.id, error=str(e))
+            return
+
+        for watch in watches:
+            try:
+                watch.last_checked_at = now
+                # Search only emails received after the watch was created
+                after_ts = int(watch.created_at.replace(tzinfo=timezone.utc).timestamp()) if watch.created_at.tzinfo is None else int(watch.created_at.timestamp())
+                query = f"{watch.query} after:{after_ts}"
+                messages = gmail.list_messages(query, max_results=1)
+                if not messages:
+                    continue
+
+                # Fetch subject + from for the notification
+                msg_id = messages[0]["id"]
+                raw = gmail._svc().users().messages().get(
+                    userId="me", id=msg_id, format="metadata",
+                    metadataHeaders=["Subject", "From"],
+                ).execute()
+                headers = {h["name"]: h["value"] for h in raw.get("payload", {}).get("headers", [])}
+                subject = headers.get("Subject", "(no subject)")
+                sender = headers.get("From", "unknown sender")
+
+                watch.is_active = False
+                watch.found_at = now
+                watch.matched_subject = subject[:512]
+                watch.matched_from = sender[:256]
+                await session.commit()
+
+                await send_notification(
+                    user.telegram_id,
+                    f"Email alert — *{watch.description}*\n\n"
+                    f"From: {sender}\n"
+                    f"Subject: {subject}",
+                )
+                logger.info("email_watch_triggered", user_id=user.id, watch_id=watch.id)
+            except Exception as e:
+                logger.error("email_watch_check_error", user_id=user.id, watch_id=watch.id, error=str(e))

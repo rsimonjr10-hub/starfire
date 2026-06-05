@@ -79,6 +79,9 @@ Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
 - "clean my spam" / "delete spam" / "clear spam folder" → CLEAN_SPAM
 - "clean my promotions" / "archive promos" / "delete promotional emails" → CLEAN_PROMOTIONS (clean_action="archive" by default; use "delete" only if user explicitly says delete)
 - "clean my inbox" / "organize my inbox" / "tidy up my email" / "inbox cleanup" → ORGANIZE_INBOX (deletes spam + archives promotions)
+- "watch for email from X" / "notify me when I get email about X" / "alert me when X emails me" / "let me know when email from X arrives" / "look out for email" → WATCH_EMAIL
+- "what emails are you watching" / "show my email watches" / "what am I watching for" → LIST_EMAIL_WATCHES
+- "cancel email watch" / "stop watching for X" / "remove email alert" → CANCEL_EMAIL_WATCH
 - "update my P/L" / "log trade" / "I made/lost $X on..." → UPDATE_SHEET
 - "what did I make today" / "P/L summary" → GET_SHEET_PL
 - "make/create a sheet called X" → CREATE_SHEET (then immediately follow with SHEET_FORMAT style="pl")
@@ -274,6 +277,21 @@ Examples of correct ACTION MODE responses:
 **ORGANIZE_INBOX** — full inbox organization: delete spam + archive promotions in one pass. rules overrides defaults.
 ```json
 {"action": "ORGANIZE_INBOX", "rules": {"delete_spam": true, "archive_promotions": true, "archive_social": false, "archive_updates": false}}
+```
+
+**WATCH_EMAIL** — register a Gmail watch; STARFIRE polls every 15 min and notifies when matched. Build the query field as a valid Gmail search string (from:, subject:, OR, etc.).
+```json
+{"action": "WATCH_EMAIL", "description": "email from Chris at the dealership", "query": "from:chris subject:dealership OR subject:car quote"}
+```
+
+**LIST_EMAIL_WATCHES** — list active email watches
+```json
+{"action": "LIST_EMAIL_WATCHES"}
+```
+
+**CANCEL_EMAIL_WATCH** — cancel a specific watch by ID, or all watches if no watch_id
+```json
+{"action": "CANCEL_EMAIL_WATCH", "watch_id": 3}
 ```
 
 **SEARCH_DRIVE** — search Google Drive
