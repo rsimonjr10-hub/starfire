@@ -85,36 +85,41 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
 
 def _bill_due_soon(bill, now: datetime, window_days: int = 1) -> bool:
     """True if an active bill is due within window_days and not yet paid this cycle."""
+    today = now.date()
+    horizon = today + timedelta(days=window_days)
+
     # One-time bill
     if not bill.is_recurring and bill.due_date:
         due = bill.due_date
         if due.tzinfo is None:
             due = due.replace(tzinfo=timezone.utc)
-        if bill.last_paid_at and bill.last_paid_at >= due:
-            return False
-        return now <= due <= now + timedelta(days=window_days)
-
-    # Recurring bill keyed to a day-of-month
-    if bill.is_recurring and bill.due_day:
-        day = min(int(bill.due_day), 28)
-        # next occurrence of that day-of-month
-        candidate = now.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
-        if candidate < now:
-            if now.month == 12:
-                candidate = candidate.replace(year=now.year + 1, month=1)
-            else:
-                candidate = candidate.replace(month=now.month + 1)
-        days_away = (candidate - now).days
-        if not (0 <= days_away <= window_days):
-            return False
-        # Already paid this cycle?
+        due_d = due.date()
+        # Paid on/after the due date → settled
         if bill.last_paid_at:
             paid = bill.last_paid_at
             if paid.tzinfo is None:
                 paid = paid.replace(tzinfo=timezone.utc)
-            if paid.month == candidate.month and paid.year == candidate.year:
+            if paid.date() >= due_d:
                 return False
-        return True
+        # Due (or overdue) within the window
+        return due_d <= horizon
+
+    # Recurring bill keyed to a day-of-month
+    if bill.is_recurring and bill.due_day:
+        day = min(int(bill.due_day), 28)
+        # This month's occurrence date
+        occ = today.replace(day=day)
+        # Already paid this month's cycle?
+        if bill.last_paid_at:
+            paid = bill.last_paid_at
+            if paid.tzinfo is None:
+                paid = paid.replace(tzinfo=timezone.utc)
+            if paid.year == occ.year and paid.month == occ.month and paid.date() >= occ:
+                return False
+        # Overdue this month, or due within the window
+        if occ <= today:
+            return True
+        return occ <= horizon
 
     return False
 

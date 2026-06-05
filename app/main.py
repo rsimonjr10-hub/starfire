@@ -70,6 +70,11 @@ async def lifespan(app: FastAPI):
     health_task = asyncio.create_task(health_worker.start())
     logger.info("background_workers_started")
 
+    # Boot-time self-diagnostic: exercises every feature's query path against
+    # the live schema and alerts the admin on any broken path.
+    from app.monitoring.selftest import selftest
+    selftest_task = asyncio.create_task(selftest.run_after_startup())
+
     yield
 
     # Shutdown
@@ -83,6 +88,7 @@ async def lifespan(app: FastAPI):
     report_task.cancel()
     automation_task.cancel()
     health_task.cancel()
+    selftest_task.cancel()
     # Shut down telegram application cleanly
     try:
         from app.telegram.bot import get_application

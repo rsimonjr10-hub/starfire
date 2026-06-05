@@ -70,6 +70,24 @@ def _build_math_ns() -> dict:
         ns["Matrix"] = sp.Matrix
         ns["N"] = sp.N          # numerical evaluation
         ns["latex"] = sp.latex  # pretty-print
+        ns["limit"] = sp.limit
+        ns["Sum"] = sp.Sum
+        ns["pi"] = sp.pi        # symbolic pi (overrides math.pi for sympy exprs)
+        ns["E"] = sp.E
+        ns["oo"] = sp.oo
+        # Override the math.* elementary functions with sympy versions — these
+        # work on BOTH symbols (for calculus) and numbers (auto-evaluate), so
+        # diff(sin(x)*x**2, x) and sin(0.5) both work.
+        ns["sin"] = sp.sin
+        ns["cos"] = sp.cos
+        ns["tan"] = sp.tan
+        ns["exp"] = sp.exp
+        ns["sqrt"] = sp.sqrt
+        ns["log"] = sp.log
+        # Pre-declare common symbols so expressions like solve(x**2-4, x)
+        # work without an explicit symbols() call.
+        for _name in ("x", "y", "z", "t", "n", "a", "b", "c", "k"):
+            ns[_name] = sp.Symbol(_name)
     except ImportError:
         pass
     return ns
