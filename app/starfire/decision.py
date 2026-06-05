@@ -117,6 +117,12 @@ class DecisionEngine:
     async def _process_message_inner(self, user: User, message: str, attachments: Optional[list] = None) -> str:
         context = await self._build_context(user)
         history = user.conversation_history or []
+        # Strip any malformed entries that slipped through before the poison-pill fix
+        history = [
+            m for m in history
+            if isinstance(m.get("content"), str) and m["content"].strip()
+            and m.get("role") in ("user", "assistant")
+        ]
 
         # Confirmation fast-path: if user says yes/go ahead and there's a pending draft,
         # extract the action directly instead of asking the brain again (which loops).
