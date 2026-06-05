@@ -42,21 +42,19 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
     )
     due_today = today_res.scalars().all()
 
+    # Bills: the model tracks recurring (due_day) and one-time (due_date) bills,
+    # with last_paid_at instead of an is_paid flag. Filter active bills, then
+    # determine which are due within ~1 day and not yet paid this cycle.
     bills_res = await db.execute(
-        select(Bill)
-        .where(
-            Bill.user_id == user_id,
-            Bill.is_paid == False,
-            Bill.due_date <= (now + timedelta(days=1)).date(),
-        )
-        .limit(3)
+        select(Bill).where(Bill.user_id == user_id, Bill.is_active == True)
     )
-    bills_due = bills_res.scalars().all()
+    all_bills = bills_res.scalars().all()
+    bills_due = [b for b in all_bills if _bill_due_soon(b, now)][:3]
 
     goals_res = await db.execute(
         select(Goal)
         .where(Goal.user_id == user_id, Goal.status == "ACTIVE")
-        .order_by(Goal.deadline.asc().nullslast())
+        .order_by(Goal.target_date.asc().nullslast())
         .limit(2)
     )
     goals = goals_res.scalars().all()
@@ -70,7 +68,7 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
     for t in due_today:
         items.append({"label": t.title, "type": "task", "urgency": 2, "tag": "due today"})
     for g in goals:
-        dl = f" · deadline {g.deadline.strftime('%b %d')}" if g.deadline else ""
+        dl = f" · deadline {g.target_date.strftime('%b %d')}" if g.target_date else ""
         items.append({"label": f"{g.title}{dl}", "type": "goal", "urgency": 1, "tag": "goal"})
 
     top3 = items[:3]
@@ -83,6 +81,42 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
         "overdue_count": len(overdue),
         "due_today_count": len(due_today),
     }
+
+
+def _bill_due_soon(bill, now: datetime, window_days: int = 1) -> bool:
+    """True if an active bill is due within window_days and not yet paid this cycle."""
+    # One-time bill
+    if not bill.is_recurring and bill.due_date:
+        due = bill.due_date
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if bill.last_paid_at and bill.last_paid_at >= due:
+            return False
+        return now <= due <= now + timedelta(days=window_days)
+
+    # Recurring bill keyed to a day-of-month
+    if bill.is_recurring and bill.due_day:
+        day = min(int(bill.due_day), 28)
+        # next occurrence of that day-of-month
+        candidate = now.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
+        if candidate < now:
+            if now.month == 12:
+                candidate = candidate.replace(year=now.year + 1, month=1)
+            else:
+                candidate = candidate.replace(month=now.month + 1)
+        days_away = (candidate - now).days
+        if not (0 <= days_away <= window_days):
+            return False
+        # Already paid this cycle?
+        if bill.last_paid_at:
+            paid = bill.last_paid_at
+            if paid.tzinfo is None:
+                paid = paid.replace(tzinfo=timezone.utc)
+            if paid.month == candidate.month and paid.year == candidate.year:
+                return False
+        return True
+
+    return False
 
 
 def format_daily_focus(focus: dict, name: str = "") -> str:

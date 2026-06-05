@@ -1139,7 +1139,7 @@ class TelegramHandlers:
 
             completed = (await session.execute(
                 select(func.count(Task.id)).where(
-                    Task.user_id == user.id, Task.status == "COMPLETE",
+                    Task.user_id == user.id, Task.status == "DONE",
                     Task.updated_at >= week_ago,
                 )
             )).scalar() or 0
@@ -1166,16 +1166,17 @@ class TelegramHandlers:
             goals_at_risk = (await session.execute(
                 select(func.count(Goal.id)).where(
                     Goal.user_id == user.id, Goal.status == "ACTIVE",
-                    Goal.deadline < now + timedelta(days=7),
+                    Goal.target_date < now + timedelta(days=7),
                 )
             )).scalar() or 0
 
-            overdue_bills = (await session.execute(
-                select(func.count(Bill.id)).where(
-                    Bill.user_id == user.id, Bill.is_paid == False,
-                    Bill.due_date < now.date(),
-                )
-            )).scalar() or 0
+            # Bills have no is_paid flag; compute overdue in Python from due_day/
+            # due_date + last_paid_at via the focus_engine helper.
+            from app.services.focus_engine import _bill_due_soon
+            all_bills = (await session.execute(
+                select(Bill).where(Bill.user_id == user.id, Bill.is_active == True)
+            )).scalars().all()
+            overdue_bills = sum(1 for b in all_bills if _bill_due_soon(b, now, window_days=0))
 
             spending = float((await session.execute(
                 select(func.sum(SpendingRecord.amount)).where(

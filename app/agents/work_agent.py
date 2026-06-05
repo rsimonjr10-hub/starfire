@@ -286,7 +286,10 @@ class WorkAgent(BaseAgent):
             if goals:
                 lines.append(f"\n**Active Goals ({len(goals)})**")
                 for g in goals:
-                    pct = f" {g.progress_pct:.0f}%" if hasattr(g, "progress_pct") and g.progress_pct else ""
+                    pct = ""
+                    if g.target_value and float(g.target_value) != 0:
+                        ratio = float(g.current_value or 0) / float(g.target_value) * 100
+                        pct = f" ({ratio:.0f}%)"
                     lines.append(f"- {g.title}{pct}")
 
         if what in ("spending", "all"):

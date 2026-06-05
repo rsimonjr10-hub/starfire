@@ -122,22 +122,22 @@ class AutomationWorker:
         for watch in watches:
             try:
                 watch.last_checked_at = now
-                # Search only emails received after the watch was created
-                after_ts = int(watch.created_at.replace(tzinfo=timezone.utc).timestamp()) if watch.created_at.tzinfo is None else int(watch.created_at.timestamp())
+                # Search only emails received after the watch was created.
+                # Gmail's after: accepts a unix timestamp (epoch seconds).
+                created = watch.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                after_ts = int(created.timestamp())
                 query = f"{watch.query} after:{after_ts}"
-                messages = gmail.list_messages(query, max_results=1)
+
+                # search() returns summary dicts with id/from/subject already
+                messages = gmail.search(query, max_results=1)
                 if not messages:
                     continue
 
-                # Fetch subject + from for the notification
-                msg_id = messages[0]["id"]
-                raw = gmail._svc().users().messages().get(
-                    userId="me", id=msg_id, format="metadata",
-                    metadataHeaders=["Subject", "From"],
-                ).execute()
-                headers = {h["name"]: h["value"] for h in raw.get("payload", {}).get("headers", [])}
-                subject = headers.get("Subject", "(no subject)")
-                sender = headers.get("From", "unknown sender")
+                msg = messages[0]
+                subject = msg.get("subject") or "(no subject)"
+                sender = msg.get("from") or "unknown sender"
 
                 watch.is_active = False
                 watch.found_at = now
