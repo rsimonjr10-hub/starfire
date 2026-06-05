@@ -46,6 +46,8 @@ class SelfTest:
             ("service.bill_due_helper", self._check_bill_helper),
             ("logic.brain_json_parse", self._check_brain_parse),
             ("logic.math_engine", self._check_math_engine),
+            ("logic.undo_recording", self._check_undo_recording),
+            ("infra.worker_heartbeats", self._check_heartbeats),
         ]
 
         results: dict[str, str] = {}
@@ -122,7 +124,8 @@ class SelfTest:
         async with AsyncSessionLocal() as s:
             await s.execute(
                 select(EmailWatch.id, EmailWatch.query, EmailWatch.is_active,
-                       EmailWatch.found_at, EmailWatch.matched_subject).limit(1)
+                       EmailWatch.found_at, EmailWatch.matched_subject,
+                       EmailWatch.on_match, EmailWatch.label_name).limit(1)
             )
 
     async def _check_agent_run_query(self):
@@ -181,6 +184,26 @@ class SelfTest:
         from app.agents.work_agent import compute_math
         assert "2" in compute_math("solve(x**2 - 4, x)")  # roots include ±2
         assert compute_math("2 + 2") == "4"
+
+    def _check_undo_recording(self):
+        """_record_undo must stash a well-formed undo slot in user.preferences."""
+        from app.starfire.decision import DecisionEngine
+
+        class _U:
+            id = 1
+            preferences = {}
+
+        eng = DecisionEngine.__new__(DecisionEngine)  # no DB needed for this call
+        u = _U()
+        eng._record_undo(u, "task", 99, "Test task")
+        assert u.preferences["undo"]["kind"] == "task"
+        assert u.preferences["undo"]["id"] == 99
+
+    def _check_heartbeats(self):
+        """Heartbeat registry must register and report a fresh beat as ok."""
+        from app.monitoring import heartbeat
+        heartbeat.beat("selftest_probe", 1.0)
+        assert heartbeat.check().get("selftest_probe") == "ok"
 
 
 selftest = SelfTest()

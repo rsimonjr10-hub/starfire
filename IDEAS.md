@@ -7,6 +7,21 @@ Priority: **P0** ship now · **P1** soon · **P2** nice-to-have
 
 ---
 
+## Shipped
+
+- **2026-06-05 — Per-action test coverage.** `tests/test_action_coverage.py`:
+  every documented action must have a handler, brain extracts action JSON from
+  prose, math/bill/undo pure-logic regressions. Live-schema coverage stays in
+  `app/monitoring/selftest.py`.
+- **2026-06-05 — Worker heartbeats.** `app/monitoring/heartbeat.py`; workers
+  beat each tick; health worker alerts on a stalled loop.
+- **2026-06-05 — Configurable email-watch actions.** `on_match` =
+  notify / archive / label / delete, executed when a watched email arrives.
+- **2026-06-05 — `/undo`.** Reverses the last reversible action (task, bill,
+  spending, memory, habit, knowledge, email-watch, task completion).
+
+---
+
 ## 2026-06-05 — seeded from monitoring/self-heal work
 
 ### Reliability & self-healing
@@ -14,10 +29,6 @@ Priority: **P0** ship now · **P1** soon · **P2** nice-to-have
   Telegram command handlers still log-only or reply with an error string; a
   failing command never reaches the admin alert path. Mirror the worker/agent
   wiring done on this date.
-- **[P1] Worker heartbeats.** The health worker pings DB/Redis/APIs but not the
-  background workers themselves. Have each worker write a `last_tick` timestamp
-  (Redis or DB); alert if a worker goes silent > 2× its interval (detects a
-  crashed/hung loop, which currently fails silently).
 - **[P1] Schedule the self-test, don't only run at boot.** Run `selftest.run()`
   every few hours so schema drift introduced by a migration is caught even
   without a redeploy.
@@ -28,10 +39,9 @@ Priority: **P0** ship now · **P1** soon · **P2** nice-to-have
   currently log and drop. Persist failures for replay.
 
 ### Testing / CI
-- **[P0] Integration tests per brain action.** The schema-drift bugs fixed on
-  this date (Bill.is_paid, Goal.deadline, Task "COMPLETE", gmail.list_messages)
-  all reached production because no test exercised those paths. Add a test that
-  dispatches each `action_type` against a seeded test DB.
+- **[P1] Seeded-DB integration tests.** The static coverage test catches
+  unhandled actions; add Postgres-backed tests that actually dispatch each
+  DB-writing action end-to-end (sandbox lacks Postgres, so run in CI/Docker).
 - **[P1] Model/migration drift check in CI.** Assert every model column has a
   matching migration and vice-versa; fail the build on drift.
 
@@ -47,12 +57,10 @@ Priority: **P0** ship now · **P1** soon · **P2** nice-to-have
   double-tap doesn't spawn two sessions.
 
 ### Features
-- **[P1] Configurable email-watch action.** When a watched email arrives, let
-  the user pre-choose: notify / archive / label / auto-draft reply (the inbox
-  screenshot hinted at find/archive/delete options).
+- **[P1] Auto-draft reply** as an email-watch `on_match` option (the basic
+  notify/archive/label/delete actions shipped 2026-06-05).
 - **[P2] Recurring digests of work-agent findings** into the knowledge base so
   research compounds over time.
-- **[P2] `/undo`** for the last reversible action (task create, bill add, etc.).
 
 ### Performance
 - **[P2] Batch `focus_engine` queries.** It issues several sequential queries

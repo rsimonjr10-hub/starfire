@@ -62,6 +62,13 @@ async def lifespan(app: FastAPI):
     if settings.telegram_bot_token and settings.telegram_webhook_url:
         await _register_telegram_webhook()
 
+    # Register worker heartbeats up front so a crash before the first beat
+    # is still detected as "stale" by the health worker.
+    from app.monitoring import heartbeat
+    heartbeat.register("market_worker", market_worker.interval)
+    heartbeat.register("automation_worker", automation_worker.interval)
+    heartbeat.register("report_worker", 30)
+
     # Start background workers
     market_task = asyncio.create_task(market_worker.start())
     event_task = asyncio.create_task(event_worker.start())

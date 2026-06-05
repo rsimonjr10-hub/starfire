@@ -7,6 +7,7 @@ from app.database import AsyncSessionLocal
 from app.models import User, PortfolioState
 from app.events.publisher import EventPublisher
 from app.monitoring.sentinel import sentinel
+from app.monitoring import heartbeat
 
 logger = structlog.get_logger(__name__)
 
@@ -28,6 +29,7 @@ class MarketWorker:
         while self._running:
             try:
                 await self._tick()
+                heartbeat.beat("market_worker", self.interval)
             except Exception as e:
                 await sentinel.capture(e, category="market_worker", context={"phase": "tick"})
             await asyncio.sleep(self.interval)

@@ -17,6 +17,7 @@ from app.integrations.osiris_telegram import osiris_telegram
 from app.integrations.osiris_bridge import osiris_bridge
 from app.telegram.bot import send_notification
 from app.monitoring.sentinel import sentinel
+from app.monitoring import heartbeat
 
 logger = structlog.get_logger(__name__)
 
@@ -31,6 +32,8 @@ class ReportWorker:
         while self._running:
             now = datetime.now(timezone.utc)
             h, m = now.hour, now.minute
+            # Loop wakes at least every 30s; allow generous slack.
+            heartbeat.beat("report_worker", 30)
 
             if h == 7 and m == 0:
                 await self._broadcast_per_user(self._morning_focus)

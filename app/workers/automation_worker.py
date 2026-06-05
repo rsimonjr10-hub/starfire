@@ -12,6 +12,7 @@ from app.models.user import User
 from app.services.automation_runner import evaluate_all
 from app.telegram.bot import send_notification
 from app.monitoring.sentinel import sentinel
+from app.monitoring import heartbeat
 
 logger = structlog.get_logger(__name__)
 
@@ -27,6 +28,7 @@ class AutomationWorker:
         while self._running:
             try:
                 await self._tick()
+                heartbeat.beat("automation_worker", self.interval)
             except Exception as e:
                 await sentinel.capture(e, category="automation_worker", context={"phase": "tick"})
             await asyncio.sleep(self.interval)
@@ -137,6 +139,7 @@ class AutomationWorker:
                     continue
 
                 msg = messages[0]
+                msg_id = msg.get("id")
                 subject = msg.get("subject") or "(no subject)"
                 sender = msg.get("from") or "unknown sender"
 
@@ -146,12 +149,34 @@ class AutomationWorker:
                 watch.matched_from = sender[:256]
                 await session.commit()
 
+                # Execute the configured on-match action, then always notify.
+                on_match = getattr(watch, "on_match", "notify") or "notify"
+                action_note = ""
+                try:
+                    if on_match == "archive" and msg_id:
+                        gmail.batch_archive([msg_id])
+                        action_note = "\n_Archived automatically._"
+                    elif on_match == "delete" and msg_id:
+                        gmail.batch_trash([msg_id])
+                        action_note = "\n_Moved to trash automatically._"
+                    elif on_match == "label" and msg_id:
+                        label_id = gmail.get_or_create_label(watch.label_name or "STARFIRE")
+                        if label_id:
+                            gmail.apply_label(msg_id, label_id)
+                            action_note = f"\n_Labeled '{watch.label_name or 'STARFIRE'}'._"
+                except Exception as e:
+                    await sentinel.capture(
+                        e, category="automation_worker.email_watch_action",
+                        context={"user_id": user.id, "watch_id": watch.id, "on_match": on_match},
+                    )
+
                 await send_notification(
                     user.telegram_id,
                     f"Email alert — *{watch.description}*\n\n"
                     f"From: {sender}\n"
-                    f"Subject: {subject}",
+                    f"Subject: {subject}"
+                    f"{action_note}",
                 )
-                logger.info("email_watch_triggered", user_id=user.id, watch_id=watch.id)
+                logger.info("email_watch_triggered", user_id=user.id, watch_id=watch.id, on_match=on_match)
             except Exception as e:
                 await sentinel.capture(e, category="automation_worker.email_watch_check", context={"user_id": user.id, "watch_id": watch.id})

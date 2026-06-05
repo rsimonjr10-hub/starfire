@@ -1,0 +1,121 @@
+"""
+Action coverage + regression tests.
+
+These catch the classes of bug that reached production this week:
+  1. An action documented in prompts.py with no handler in decision.py
+     (the model is told to emit it, but nothing executes it).
+  2. The brain failing to extract action JSON when mixed with prose
+     (raw JSON leaking into the chat).
+  3. Pure-logic regressions in the math engine, bill-due helper, and the
+     /undo recording shape.
+
+They run without a database or network — safe in CI and the sandbox.
+"""
+import re
+import json
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+PROMPTS = ROOT / "app" / "starfire" / "prompts.py"
+DECISION = ROOT / "app" / "starfire" / "decision.py"
+
+
+# ── 1. Documented actions must have a handler ────────────────────────────────
+
+def _documented_actions() -> set[str]:
+    """Every action referenced as a JSON example in prompts.py."""
+    text = PROMPTS.read_text()
+    return set(re.findall(r'"action":\s*"([A-Z_]+)"', text))
+
+
+def _handled_actions() -> set[str]:
+    """Every action_type the decision engine branches on."""
+    text = DECISION.read_text()
+    handled = set(re.findall(r'action_type\s*==\s*"([A-Z_]+)"', text))
+    # also tuple membership: action_type in ("A", "B")
+    for grp in re.findall(r'action_type\s+in\s+\(([^)]*)\)', text):
+        handled |= set(re.findall(r'"([A-Z_]+)"', grp))
+    return handled
+
+
+def test_every_documented_action_has_a_handler():
+    documented = _documented_actions()
+    handled = _handled_actions()
+    # Actions intentionally handled elsewhere (routed/relayed) or generic
+    allowlist = {"NOTIFY", "IGNORE", "CHAT"}
+    missing = documented - handled - allowlist
+    assert not missing, (
+        f"Actions documented in prompts.py but not dispatched in decision.py: "
+        f"{sorted(missing)}"
+    )
+
+
+def test_new_features_are_wired():
+    """Lock in this session's features so they can't silently regress."""
+    handled = _handled_actions()
+    for action in ("WATCH_EMAIL", "START_WORK", "COMPUTE_MATH", "UNDO",
+                   "GET_DAILY_FOCUS", "ANALYZE_DECISION"):
+        assert action in handled, f"{action} lost its handler"
+
+
+# ── 2. Brain extracts action JSON even when mixed with prose ──────────────────
+
+@pytest.fixture
+def brain():
+    from app.starfire.brain import StarfireBrain
+    return StarfireBrain.__new__(StarfireBrain)  # no API client needed
+
+
+def test_pure_json_action(brain):
+    r = brain._parse_response('{"action": "CREATE_TASK", "title": "x"}')
+    assert r["type"] == "action" and r["content"]["action"] == "CREATE_TASK"
+
+
+def test_code_block_action(brain):
+    r = brain._parse_response('Sure:\n```json\n{"action": "UNDO"}\n```')
+    assert r["type"] == "action" and r["content"]["action"] == "UNDO"
+
+
+def test_prose_plus_embedded_action(brain):
+    # The exact bug from the screenshot: narrative then JSON.
+    mixed = 'Got it — pulling those now.\n\n{"action": "GET_EMAILS", "query": "from:x"}'
+    r = brain._parse_response(mixed)
+    assert r["type"] == "action" and r["content"]["action"] == "GET_EMAILS"
+
+
+def test_plain_chat_is_not_an_action(brain):
+    r = brain._parse_response("Here's a summary of your week. Nothing urgent.")
+    assert r["type"] == "chat"
+
+
+def test_non_action_json_is_chat(brain):
+    r = brain._parse_response('{"name": "John", "age": 30}')
+    assert r["type"] == "chat"
+
+
+# ── 3. Pure-logic regressions ────────────────────────────────────────────────
+
+def test_math_engine_algebra_and_calculus():
+    from app.agents.work_agent import compute_math
+    assert compute_math("solve(x**2 - 4, x)") == "[-2, 2]"
+    assert compute_math("2 + 2") == "4"
+    # symbolic derivative must not raise
+    assert "cos(x)" in compute_math("diff(sin(x)*x**2, x)")
+
+
+def test_bill_due_soon_today_and_future():
+    from datetime import datetime, timezone, timedelta
+    from app.services.focus_engine import _bill_due_soon
+
+    class B:
+        def __init__(self, **kw):
+            self.is_recurring = kw.get("is_recurring", True)
+            self.due_day = kw.get("due_day")
+            self.due_date = kw.get("due_date")
+            self.last_paid_at = kw.get("last_paid_at")
+
+    now = datetime.now(timezone.utc)
+    assert _bill_due_soon(B(due_day=now.day), now, window_days=1) is True
+    assert _bill_due_soon(B(is_recurring=False, due_date=now + timedelta(days=30)), now) is False

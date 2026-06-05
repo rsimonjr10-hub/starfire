@@ -180,6 +180,10 @@ class DecisionEngine:
         if action_type in GOOGLE_ACTIONS:
             return await self._handle_google_action(user, action, history, context, attachments=attachments)
 
+        # ── UNDO ────────────────────────────────────────────────────────
+        if action_type == "UNDO":
+            return await self._undo(user)
+
         # ── MEMORY ──────────────────────────────────────────────────────
         if action_type == "REMEMBER":
             return await self._remember(user, action)
@@ -1101,14 +1105,30 @@ class DecisionEngine:
                 query = action.get("query", "")
                 if not query:
                     return "I need a search term to watch for — e.g. from:chris@dealer.com or subject:quote."
+                on_match = (action.get("on_match") or "notify").lower()
+                if on_match not in ("notify", "archive", "label", "delete"):
+                    on_match = "notify"
+                label_name = action.get("label_name")
+                if on_match == "label" and not label_name:
+                    label_name = "STARFIRE"
                 watch = EmailWatch(
                     user_id=user.id,
                     description=description,
                     query=query,
+                    on_match=on_match,
+                    label_name=label_name,
                 )
                 self.db.add(watch)
+                await self.db.flush()
+                self._record_undo(user, "watch", watch.id, description)
                 await self.db.commit()
-                return f"Watching for: *{description}*\nI'll notify you the moment it hits your inbox."
+                action_phrase = {
+                    "notify": "I'll notify you the moment it hits your inbox.",
+                    "archive": "I'll notify you and archive it automatically.",
+                    "label": f"I'll notify you and label it '{label_name}'.",
+                    "delete": "I'll notify you and move it to trash automatically.",
+                }[on_match]
+                return f"Watching for: *{description}*\n{action_phrase}"
 
             if action_type == "LIST_EMAIL_WATCHES":
                 from app.models.email_watch import EmailWatch
@@ -1123,7 +1143,9 @@ class DecisionEngine:
                     return "No active email watches."
                 lines = ["*Active Email Watches*\n"]
                 for w in watches:
-                    lines.append(f"• [{w.id}] *{w.description}*\n  `{w.query}`")
+                    act = getattr(w, "on_match", "notify") or "notify"
+                    act_label = f" → {act}" if act != "notify" else ""
+                    lines.append(f"• [{w.id}] *{w.description}*{act_label}\n  `{w.query}`")
                 return "\n".join(lines)
 
             if action_type == "CANCEL_EMAIL_WATCH":
@@ -1633,6 +1655,97 @@ class DecisionEngine:
     # BILLS
     # ─────────────────────────────────────────────────────────────────────
 
+    # ─────────────────────────────────────────────────────────────────────
+    # UNDO — reverse the last reversible action
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _record_undo(self, user: User, kind: str, target_id, label: str, extra: dict = None) -> None:
+        """Stash the last reversible action so /undo can reverse it."""
+        prefs = dict(user.preferences or {})
+        prefs["undo"] = {
+            "kind": kind,
+            "id": target_id,
+            "label": label,
+            "extra": extra or {},
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        user.preferences = prefs  # reassign so SQLAlchemy flags the JSON dirty
+
+    async def _undo(self, user: User) -> str:
+        prefs = dict(user.preferences or {})
+        undo = prefs.get("undo")
+        if not undo:
+            return "Nothing to undo."
+
+        kind = undo.get("kind")
+        target_id = undo.get("id")
+        label = undo.get("label", "")
+
+        # Import models lazily to avoid circulars
+        from app.models.task import Task as TaskModel
+        from app.models.spending import SpendingRecord
+        from app.models.habit import Habit
+        from app.models.knowledge_item import KnowledgeItem
+        from app.models.email_watch import EmailWatch
+
+        async def _delete(model):
+            obj = (await self.db.execute(
+                select(model).where(model.id == target_id, model.user_id == user.id)
+            )).scalar_one_or_none()
+            if obj:
+                await self.db.delete(obj)
+            return obj is not None
+
+        try:
+            ok = False
+            if kind == "task":
+                ok = await _delete(TaskModel)
+            elif kind == "bill":
+                ok = await _delete(Bill)
+            elif kind == "spending":
+                ok = await _delete(SpendingRecord)
+            elif kind == "habit":
+                ok = await _delete(Habit)
+            elif kind == "knowledge":
+                ok = await _delete(KnowledgeItem)
+            elif kind == "memory":
+                mem = (await self.db.execute(
+                    select(UserMemory).where(UserMemory.id == target_id, UserMemory.user_id == user.id)
+                )).scalar_one_or_none()
+                if mem:
+                    mem.is_active = False
+                    ok = True
+            elif kind == "watch":
+                w = (await self.db.execute(
+                    select(EmailWatch).where(EmailWatch.id == target_id, EmailWatch.user_id == user.id)
+                )).scalar_one_or_none()
+                if w:
+                    w.is_active = False
+                    ok = True
+            elif kind == "complete_task":
+                t = (await self.db.execute(
+                    select(TaskModel).where(TaskModel.id == target_id, TaskModel.user_id == user.id)
+                )).scalar_one_or_none()
+                if t:
+                    t.status = "PENDING"
+                    t.completed_at = None
+                    ok = True
+            else:
+                return f"Can't undo '{kind}'."
+
+            # Clear the undo slot regardless, so it's one-shot
+            prefs.pop("undo", None)
+            user.preferences = prefs
+            await self.db.commit()
+
+            if not ok:
+                return f"Couldn't undo — *{label}* was already removed or changed."
+            verb = "Reverted" if kind == "complete_task" else "Removed"
+            return f"Undone. {verb}: *{label}*"
+        except Exception as e:
+            logger.error("undo_error", kind=kind, error=str(e))
+            return f"Undo failed: {e}"
+
     async def _add_bill(self, user: User, action: dict) -> str:
         bill = Bill(
             user_id=user.id,
@@ -1651,6 +1764,7 @@ class DecisionEngine:
                 pass
         self.db.add(bill)
         await self.db.flush()
+        self._record_undo(user, "bill", bill.id, bill.name)
         recur = "monthly" if bill.is_recurring else "one-time"
         due = f" (due day {bill.due_day})" if bill.due_day else ""
         return f"Bill added: *{bill.name}* — ${bill.amount:.2f}/{recur}{due}"
@@ -1685,6 +1799,7 @@ class DecisionEngine:
                 pass
         self.db.add(task)
         await self.db.flush()
+        self._record_undo(user, "task", task.id, task.title)
         due_str = f" — due {task.due_at.strftime('%b %d')}" if task.due_at else ""
         return f"Task added: *{task.title}*{due_str}"
 
@@ -1698,6 +1813,7 @@ class DecisionEngine:
             return f"Task {task_id} not found."
         task.status = "DONE"
         task.completed_at = datetime.now(timezone.utc)
+        self._record_undo(user, "complete_task", task.id, task.title)
         return f"Done! *{task.title}* marked complete."
 
     async def _update_goal(self, user: User, action: dict) -> str:
@@ -1729,6 +1845,7 @@ class DecisionEngine:
         )
         self.db.add(record)
         await self.db.flush()
+        self._record_undo(user, "spending", record.id, f"${float(record.amount):.2f} in {record.category}")
         await self.publisher.publish(
             "SPENDING_EVENT",
             {"user_id": user.id, "category": record.category, "amount": float(record.amount)},
@@ -1801,6 +1918,7 @@ class DecisionEngine:
         habit = Habit(user_id=user.id, name=name, frequency=frequency)
         self.db.add(habit)
         await self.db.flush()
+        self._record_undo(user, "habit", habit.id, name)
         return f"📋 Habit created: *{name}* ({frequency}). Say 'I did {name.lower()} today' to log it."
 
     async def _habit_status(self, user: User) -> str:
@@ -1960,6 +2078,7 @@ class DecisionEngine:
                 item.embedding = vec
         except Exception:
             pass
+        self._record_undo(user, "knowledge", item.id, title)
         return f"📚 Saved to knowledge base: *{title}*\n_Type: {item.item_type}{' · Tags: ' + ', '.join(tags) if tags else ''}_"
 
     async def _search_knowledge(self, user: User, action: dict, history: list, context: Optional[str]) -> str:
@@ -2090,6 +2209,7 @@ class DecisionEngine:
         )
         self.db.add(mem)
         await self.db.flush()
+        self._record_undo(user, "memory", mem.id, content[:60])
         icons = {"fact": "🧠", "preference": "⚙️", "instruction": "📌", "event": "📅"}
         return f"{icons.get(category, '🧠')} Remembered: _{content}_"
 

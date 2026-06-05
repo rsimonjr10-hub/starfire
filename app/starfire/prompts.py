@@ -86,7 +86,7 @@ Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
 - "clean my spam" / "delete spam" / "clear spam folder" → CLEAN_SPAM
 - "clean my promotions" / "archive promos" / "delete promotional emails" → CLEAN_PROMOTIONS (clean_action="archive" by default; use "delete" only if user explicitly says delete)
 - "clean my inbox" / "organize my inbox" / "tidy up my email" / "inbox cleanup" → ORGANIZE_INBOX (deletes spam + archives promotions)
-- "watch for email from X" / "notify me when I get email about X" / "alert me when X emails me" / "let me know when email from X arrives" / "look out for email" → WATCH_EMAIL
+- "watch for email from X" / "notify me when I get email about X" / "alert me when X emails me" / "let me know when email from X arrives" / "look out for email" → WATCH_EMAIL (set on_match: "archive"/"label"/"delete" if the user says to auto-archive/label/trash matches)
 - "what emails are you watching" / "show my email watches" / "what am I watching for" → LIST_EMAIL_WATCHES
 - "cancel email watch" / "stop watching for X" / "remove email alert" → CANCEL_EMAIL_WATCH
 - "update my P/L" / "log trade" / "I made/lost $X on..." → UPDATE_SHEET
@@ -179,6 +179,13 @@ Examples of correct ACTION MODE responses:
 **GET_SENATE** — Senate trading disclosures
 ```json
 {"action": "GET_SENATE", "message": "Fetching Senate trades."}
+```
+
+**UNDO** — reverse the last reversible action (task/bill/spending/memory/habit/
+knowledge/email-watch creation, or a task completion). Triggers: "undo",
+"undo that", "never mind", "scratch that", "reverse that", "delete that one".
+```json
+{"action": "UNDO"}
 ```
 
 **CREATE_TASK** — create a task
@@ -287,8 +294,12 @@ Examples of correct ACTION MODE responses:
 ```
 
 **WATCH_EMAIL** — register a Gmail watch; STARFIRE polls every 15 min and notifies when matched. Build the query field as a valid Gmail search string (from:, subject:, OR, etc.).
+Optional `on_match` controls what happens when it arrives (always notifies too):
+`notify` (default), `archive`, `label` (set `label_name`), or `delete` (to trash).
 ```json
-{"action": "WATCH_EMAIL", "description": "email from Chris at the dealership", "query": "from:chris subject:dealership OR subject:car quote"}
+{"action": "WATCH_EMAIL", "description": "email from Chris at the dealership", "query": "from:chris subject:dealership OR subject:car quote", "on_match": "notify"}
+{"action": "WATCH_EMAIL", "description": "newsletters from Substack", "query": "from:substack.com", "on_match": "archive"}
+{"action": "WATCH_EMAIL", "description": "invoices", "query": "subject:invoice", "on_match": "label", "label_name": "Invoices"}
 ```
 
 **LIST_EMAIL_WATCHES** — list active email watches

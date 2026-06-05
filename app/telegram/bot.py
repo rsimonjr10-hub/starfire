@@ -64,6 +64,9 @@ async def get_application() -> Application:
         # Work Agent — autonomous background research + math
         _application.add_handler(CommandHandler("work", h.cmd_work))
         _application.add_handler(CommandHandler("workstatus", h.cmd_workstatus))
+
+        # Undo — reverse the last reversible action
+        _application.add_handler(CommandHandler("undo", h.cmd_undo))
         _application.add_handler(CommandHandler("life", h.cmd_life))
         _application.add_handler(CommandHandler("showp", h.cmd_showp))
 

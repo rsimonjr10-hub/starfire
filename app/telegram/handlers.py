@@ -81,7 +81,9 @@ class TelegramHandlers:
             "/decide [question] — Decision analysis with math + recommendation\n"
             "/score — Weekly performance score\n"
             "/brief [daily|weekly|monthly|quarterly] — Generate AI briefing\n"
-            "/cfo — Run CFO financial analysis agent\n\n"
+            "/cfo — Run CFO financial analysis agent\n"
+            "/work [task] — Autonomous background research + math\n"
+            "/workstatus — Status of background work sessions\n\n"
             "<b>Gmail &amp; Drive</b>\n"
             "/inbox — Unread emails\n"
             "/clean_inbox — Delete spam + archive promotions\n"
@@ -92,6 +94,7 @@ class TelegramHandlers:
             "/showp — Live Alpaca paper portfolio (positions, P&amp;L, fills)\n"
             "/osiris — OSIRIS bridge status\n\n"
             "<b>System</b>\n"
+            "/undo — Reverse the last action\n"
             "/health — System status\n"
             "/mylink — Your personal dashboard URL\n"
             "/memory — View persistent memory\n\n"
@@ -1215,6 +1218,10 @@ class TelegramHandlers:
                 lines.append(f"  • {overdue_bills} overdue bill(s)")
 
         await self._safe_reply(update, "\n".join(lines))
+
+    async def cmd_undo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Reverse the last reversible action."""
+        await self._run_brain(update, "undo that")
 
     async def cmd_work(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Usage: /work [task] — run an autonomous background research/analysis session."""

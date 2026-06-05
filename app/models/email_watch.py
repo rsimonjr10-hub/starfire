@@ -10,6 +10,8 @@ class EmailWatch(Base):
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     description = Column(String(512), nullable=False)   # human-readable label
     query = Column(String(512), nullable=False)          # Gmail search query
+    on_match = Column(String(32), default="notify", nullable=False)  # notify|archive|label|delete
+    label_name = Column(String(128), nullable=True)      # for on_match="label"
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_checked_at = Column(DateTime(timezone=True), nullable=True)
