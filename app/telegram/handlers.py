@@ -77,6 +77,9 @@ class TelegramHandlers:
             "<b>Knowledge OS</b>\n"
             "/know [query] — Search your knowledge base\n\n"
             "<b>AI Briefing &amp; Agents</b>\n"
+            "/focus — Top 3 priorities today + the one ask\n"
+            "/decide [question] — Decision analysis with math + recommendation\n"
+            "/score — Weekly performance score\n"
             "/brief [daily|weekly|monthly|quarterly] — Generate AI briefing\n"
             "/cfo — Run CFO financial analysis agent\n\n"
             "<b>Gmail &amp; Drive</b>\n"
@@ -1107,6 +1110,110 @@ class TelegramHandlers:
             await self._run_brain(update, f"search my knowledge base for: {query}")
         else:
             await self._run_brain(update, "show my knowledge base items")
+
+    async def cmd_focus(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Today's top 3 priorities + the one ask."""
+        await self._run_brain(update, "give me my daily focus")
+
+    async def cmd_decide(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Usage: /decide hire full-time vs contractor"""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: `/decide [your question]`\n"
+                "Example: `/decide hire full-time vs contractor`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        await self._run_brain(update, "decision: " + " ".join(args))
+
+    async def cmd_score(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Weekly performance score — tasks, goals, bills."""
+        user = await self._get_or_create_user(update)
+        from sqlalchemy import func
+        now = datetime.now(timezone.utc)
+        week_ago = now - timedelta(days=7)
+
+        async with AsyncSessionLocal() as session:
+            from app.models import SpendingRecord
+
+            completed = (await session.execute(
+                select(func.count(Task.id)).where(
+                    Task.user_id == user.id, Task.status == "COMPLETE",
+                    Task.updated_at >= week_ago,
+                )
+            )).scalar() or 0
+
+            pending = (await session.execute(
+                select(func.count(Task.id)).where(
+                    Task.user_id == user.id, Task.status == "PENDING",
+                )
+            )).scalar() or 0
+
+            overdue_tasks = (await session.execute(
+                select(func.count(Task.id)).where(
+                    Task.user_id == user.id, Task.status == "PENDING",
+                    Task.due_at < now,
+                )
+            )).scalar() or 0
+
+            active_goals = (await session.execute(
+                select(func.count(Goal.id)).where(
+                    Goal.user_id == user.id, Goal.status == "ACTIVE",
+                )
+            )).scalar() or 0
+
+            goals_at_risk = (await session.execute(
+                select(func.count(Goal.id)).where(
+                    Goal.user_id == user.id, Goal.status == "ACTIVE",
+                    Goal.deadline < now + timedelta(days=7),
+                )
+            )).scalar() or 0
+
+            overdue_bills = (await session.execute(
+                select(func.count(Bill.id)).where(
+                    Bill.user_id == user.id, Bill.is_paid == False,
+                    Bill.due_date < now.date(),
+                )
+            )).scalar() or 0
+
+            spending = float((await session.execute(
+                select(func.sum(SpendingRecord.amount)).where(
+                    SpendingRecord.user_id == user.id,
+                    SpendingRecord.recorded_at >= week_ago,
+                )
+            )).scalar() or 0)
+
+        # 100 base — deductions for overdue items
+        score = 100
+        score -= min(30, overdue_tasks * 5)
+        score -= min(20, overdue_bills * 10)
+        if pending > 20:
+            score -= 10
+        score = max(0, score)
+        grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D"
+
+        lines = [f"*STARFIRE Weekly Score: {score}/100 ({grade})*\n"]
+        lines += [
+            "*Tasks*",
+            f"  ✓ Completed this week: {completed}",
+            f"  ⏳ Pending: {pending}",
+            f"  {'⚠️' if overdue_tasks else '✓'} Overdue: {overdue_tasks}",
+            "\n*Goals*",
+            f"  Active: {active_goals}",
+            f"  {'⚠️ ' + str(goals_at_risk) + ' due within 7 days' if goals_at_risk else '✓ No goals at risk'}",
+            "\n*Bills*",
+            f"  {'⚠️ ' + str(overdue_bills) + ' overdue' if overdue_bills else '✓ All current'}",
+            f"\n*Spending (7 days):* ${spending:,.2f}",
+        ]
+        if score < 75:
+            lines.append("\n*Needs attention:*")
+            if overdue_tasks:
+                lines.append(f"  • {overdue_tasks} overdue task(s)")
+            if overdue_bills:
+                lines.append(f"  • {overdue_bills} overdue bill(s)")
+
+        await self._safe_reply(update, "\n".join(lines))
 
     async def cmd_cfo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Run the CFO agent for financial analysis."""

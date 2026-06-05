@@ -588,6 +588,23 @@ Triggers:
 - "weekly briefing" → `GENERATE_BRIEFING` type=weekly
 - "CFO analysis" / "run the CFO agent" / "financial analysis" → `RUN_CFO_AGENT`
 - "research agent" / "search my knowledge and synthesize" → `RUN_RESEARCH_AGENT`
+- "what should I focus on today" / "my top priorities" / "daily focus" / "what matters today" / "what should I work on" / "focus mode" → `GET_DAILY_FOCUS`
+- "should I do X or Y" / "help me decide" / "X vs Y" / "option A or B" / "decide between" / "which should I choose" / "is it worth it" / "decision:" → `ANALYZE_DECISION`
+
+**GET_DAILY_FOCUS** — surface top 3 priorities from tasks, goals, and bills
+```json
+{"action": "GET_DAILY_FOCUS", "message": "Let me check what matters most today."}
+```
+
+**ANALYZE_DECISION** — structured decision analysis with math and a direct recommendation.
+The `message` field MUST contain your full analysis in this structure:
+• State each option clearly
+• For each option: pros, cons, estimated cost / time / risk / upside
+• Do the math where numbers exist (ROI, payback period, opportunity cost)
+• Give a direct recommendation and the one sentence reason
+```json
+{"action": "ANALYZE_DECISION", "question": "hire full-time vs contractor", "message": "**Decision: Full-time vs Contractor**\n\n**Full-time**\nPros: ...\nCons: ...\nCost: $X/yr loaded\n\n**Contractor**\nPros: ...\nCons: ...\nCost: $Y/project\n\n**Recommendation:** Go contractor — saves $Z and preserves optionality until you hit $X MRR."}
+```
 
 **GENERATE_BRIEFING** — generate an AI executive briefing from live data
 ```json

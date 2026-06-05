@@ -239,6 +239,13 @@ class DecisionEngine:
         if action_type == "RUN_RESEARCH_AGENT":
             return await self._run_agent(user, "research", action)
 
+        # ── DAILY FOCUS & DECISION BRAIN ────────────────────────────────
+        if action_type == "GET_DAILY_FOCUS":
+            return await self._get_daily_focus(user)
+
+        if action_type == "ANALYZE_DECISION":
+            return action.get("message", "I need more context. What options are you weighing?")
+
         return action.get("message", "Action processed.")
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1908,6 +1915,15 @@ class DecisionEngine:
     # ─────────────────────────────────────────────────────────────────────
     # AI BRIEFING & AGENTS
     # ─────────────────────────────────────────────────────────────────────
+
+    async def _get_daily_focus(self, user: User) -> str:
+        from app.services.focus_engine import compute_daily_focus, format_daily_focus
+        try:
+            focus = await compute_daily_focus(self.db, user.id)
+            return format_daily_focus(focus, user.first_name or "")
+        except Exception as e:
+            logger.error("daily_focus_error", error=str(e))
+            return "Couldn't load your focus right now. Try /tasks for your pending work."
 
     async def _generate_briefing(self, user: User, action: dict) -> str:
         from app.services.briefing import generate_briefing

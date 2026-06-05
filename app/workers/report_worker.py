@@ -31,7 +31,10 @@ class ReportWorker:
             now = datetime.now(timezone.utc)
             h, m = now.hour, now.minute
 
-            if h == 9 and m == 0:
+            if h == 7 and m == 0:
+                await self._broadcast_per_user(self._morning_focus)
+                await asyncio.sleep(61)
+            elif h == 9 and m == 0:
                 await self._broadcast(await self._morning_briefing())
                 await asyncio.sleep(61)
             elif h == 22 and m == 0:
@@ -49,6 +52,17 @@ class ReportWorker:
     # ─────────────────────────────────────────────────────────────────────
     # MORNING BRIEFING
     # ─────────────────────────────────────────────────────────────────────
+
+    async def _morning_focus(self, user) -> list[str]:
+        """7am per-user: top 3 priorities + the one ask. No AI call — fast."""
+        from app.services.focus_engine import compute_daily_focus, format_daily_focus
+        try:
+            async with AsyncSessionLocal() as session:
+                focus = await compute_daily_focus(session, user.id)
+            return [format_daily_focus(focus, user.first_name or "")]
+        except Exception as e:
+            logger.error("morning_focus_error", user_id=user.id, error=str(e))
+            return []
 
     async def _morning_briefing(self) -> list[str]:
         logger.info("building_morning_briefing")

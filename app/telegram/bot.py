@@ -51,6 +51,9 @@ async def get_application() -> Application:
         _application.add_handler(CommandHandler("memory", h.cmd_memory))
 
         # Starfire One — Life OS, Knowledge OS, Business OS, AI Briefing
+        _application.add_handler(CommandHandler("focus", h.cmd_focus))
+        _application.add_handler(CommandHandler("decide", h.cmd_decide))
+        _application.add_handler(CommandHandler("score", h.cmd_score))
         _application.add_handler(CommandHandler("brief", h.cmd_brief))
         _application.add_handler(CommandHandler("habits", h.cmd_habits))
         _application.add_handler(CommandHandler("journal", h.cmd_journal))
