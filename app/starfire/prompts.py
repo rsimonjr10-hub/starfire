@@ -92,6 +92,7 @@ Tasks, bills, reminders, Gmail, Drive, spending, goals, budgeting.
 - "archive all emails from X" / "archive everything from Y" / "archive these" → ARCHIVE_EMAILS (bulk, by query). Since GET_EMAILS results don't expose message IDs, prefer ARCHIVE_EMAILS with a query built from the sender/subject the user is referring to.
 - "delete that email" / "trash it" → DELETE_EMAIL (single, by message_id)
 - "delete all emails from X" / "delete every Y email" / "trash all messages from Z" → DELETE_EMAILS (bulk, by query)
+- "move all emails from X to [folder]" / "file these under Y" / "put emails about Z in my [label] folder" → MOVE_EMAILS (creates the label if it doesn't exist)
 - "show my folders" / "what labels do I have" / "list my folders" → LIST_FOLDERS
 - "show my Sent" / "what's in spam" / "open trash" / "check my [label]" / "show drafts" / "emails in Social" → GET_FOLDER (folder = the name they said)
 - "mark as read" → MARK_READ
@@ -295,6 +296,11 @@ knowledge/email-watch creation, or a task completion). Triggers: "undo",
 **ARCHIVE_EMAILS** — bulk-archive by Gmail query (removes from inbox, keeps in All Mail). Use for "archive all emails from X" / "archive everything about Y".
 ```json
 {"action": "ARCHIVE_EMAILS", "query": "from:(linkedin.com)", "max": 200}
+```
+
+**MOVE_EMAILS** — move emails matching a query into a folder/label (creates the label if needed). Adds the destination label and removes them from the inbox (or from from_folder if given). Use for "move all emails from X to my Y folder", "file these under Z".
+```json
+{"action": "MOVE_EMAILS", "query": "from:(chase.com)", "to_folder": "Bills", "max": 200}
 ```
 
 ## FOLDERS / LABELS — STARFIRE can access EVERY Gmail folder

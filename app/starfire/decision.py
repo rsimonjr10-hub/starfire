@@ -39,7 +39,7 @@ GOOGLE_ACTIONS = {
     "GET_EMAILS", "READ_EMAIL", "SEND_EMAIL",
     "DRAFT_EMAIL", "SEND_DRAFT", "LIST_DRAFTS", "DELETE_DRAFT",
     "REPLY_EMAIL", "ARCHIVE_EMAIL", "ARCHIVE_EMAILS", "DELETE_EMAIL",
-    "DELETE_EMAILS", "MARK_READ",
+    "DELETE_EMAILS", "MOVE_EMAILS", "MARK_READ",
     # Folders / labels — full access to every folder
     "LIST_FOLDERS", "GET_FOLDER", "READ_FOLDER",
     # Inbox organization
@@ -1091,6 +1091,42 @@ class DecisionEngine:
                 result = gmail.batch_trash(ids)
                 trashed = result.get("trashed", len(ids)) if isinstance(result, dict) else len(ids)
                 return f"Moved {trashed} email(s) matching `{query}` to trash ✓"
+
+            if action_type == "MOVE_EMAILS":
+                # Move emails matching a query into a folder/label. "Move" =
+                # add the destination label + remove the source (inbox by default).
+                query = action.get("query", "").strip()
+                to_folder = action.get("to_folder") or action.get("folder") or action.get("label")
+                if not query or not to_folder:
+                    return "Tell me which emails (query) and the destination folder. e.g. move emails from Chase to a Bills label."
+                max_n = int(action.get("max", 200))
+                matches = gmail.search(query, max_results=max_n)
+                ids = [m["id"] for m in matches if m.get("id")]
+                if not ids:
+                    return f"No emails matched `{query}` — nothing moved."
+                # Destination: resolve a system folder, else create the user label
+                dest_id = gmail.resolve_folder(to_folder)
+                if dest_id in (None,) or dest_id == to_folder:
+                    # not a known system label → create/get a user label by name
+                    dest_id = gmail.get_or_create_label(to_folder)
+                if not dest_id:
+                    return f"Couldn't find or create the folder '{to_folder}'."
+                # Source to remove from: explicit from_folder, else INBOX
+                from_folder = action.get("from_folder")
+                remove_ids = []
+                if from_folder:
+                    src = gmail.resolve_folder(from_folder)
+                    if src:
+                        remove_ids = [src]
+                else:
+                    remove_ids = ["INBOX"]
+                result = gmail.batch_move(ids, add_label_ids=[dest_id], remove_label_ids=remove_ids)
+                moved = result.get("moved", 0) if isinstance(result, dict) else len(ids)
+                errors = result.get("errors", 0) if isinstance(result, dict) else 0
+                if moved == 0 and errors:
+                    return f"Couldn't move — Gmail rejected the request ({errors} error(s))."
+                suffix = f" ({errors} failed)" if errors else ""
+                return f"Moved {moved} email(s) matching `{query}` to *{to_folder}* ✓{suffix}"
 
             if action_type == "MARK_READ":
                 message_id = action.get("message_id", "")

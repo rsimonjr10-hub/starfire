@@ -550,6 +550,29 @@ class GmailService:
             logger.error("gmail_apply_label_error", message_id=message_id, error=str(e))
             return False
 
+    def batch_move(self, message_ids: list[str], add_label_ids: list[str],
+                   remove_label_ids: list[str]) -> dict:
+        """Bulk add/remove labels — the primitive behind 'move to folder'."""
+        if not message_ids:
+            return {"moved": 0, "errors": 0}
+        moved, errors = 0, 0
+        body = {}
+        if add_label_ids:
+            body["addLabelIds"] = add_label_ids
+        if remove_label_ids:
+            body["removeLabelIds"] = remove_label_ids
+        for i in range(0, len(message_ids), 1000):
+            chunk = message_ids[i:i + 1000]
+            try:
+                self._svc.users().messages().batchModify(
+                    userId="me", body={"ids": chunk, **body},
+                ).execute()
+                moved += len(chunk)
+            except Exception as e:
+                logger.error("gmail_batch_move_error", chunk_size=len(chunk), error=str(e))
+                errors += len(chunk)
+        return {"moved": moved, "errors": errors}
+
     def _fetch_summary(self, message_id: str) -> dict:
         try:
             msg = self._svc.users().messages().get(
