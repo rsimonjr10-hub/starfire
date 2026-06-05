@@ -64,7 +64,13 @@ class StarfireBrain:
             raw = response.content[0].text.strip()
             return self._parse_response(raw)
         except Exception as e:
-            logger.error("starfire_brain_error", error=str(e))
+            logger.error("starfire_brain_error", error=str(e), error_type=type(e).__name__)
+            try:
+                from app.monitoring.sentinel import sentinel
+                await sentinel.capture(e, category="brain.think",
+                                       context={"msg": user_message[:200]})
+            except Exception:
+                pass
             return {
                 "type": "chat",
                 "content": "I encountered an issue processing that request. Please try again.",
@@ -151,14 +157,41 @@ class StarfireBrain:
         return {"type": "chat", "content": stripped, "raw": raw}
 
     def _trim_history(self, history: list[dict]) -> list[dict]:
-        """Keep last N messages, always preserving role alternation."""
-        if len(history) <= MAX_HISTORY_MESSAGES:
-            return history
-        trimmed = history[-MAX_HISTORY_MESSAGES:]
-        # Ensure first message is from user
-        while trimmed and trimmed[0]["role"] != "user":
-            trimmed = trimmed[1:]
-        return trimmed
+        """
+        Keep the last N messages as a VALID Anthropic message list:
+        - drop any message with empty/whitespace content (the API 400s on these,
+          which previously poisoned the whole conversation)
+        - collapse consecutive same-role messages, keeping the latest
+        - ensure the list starts with a user message
+        """
+        # 1. Keep only well-formed, non-empty messages
+        clean: list[dict] = []
+        for m in history:
+            role = m.get("role")
+            content = m.get("content")
+            if role not in ("user", "assistant"):
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            clean.append({"role": role, "content": content})
+
+        # 2. Trim to the window
+        if len(clean) > MAX_HISTORY_MESSAGES:
+            clean = clean[-MAX_HISTORY_MESSAGES:]
+
+        # 3. Enforce strict user/assistant alternation (Anthropic requirement)
+        alternating: list[dict] = []
+        for m in clean:
+            if alternating and alternating[-1]["role"] == m["role"]:
+                alternating[-1] = m  # replace with the newer same-role message
+            else:
+                alternating.append(m)
+
+        # 4. Must start with a user message
+        while alternating and alternating[0]["role"] != "user":
+            alternating.pop(0)
+
+        return alternating
 
     async def extract_action_from_draft(self, draft_message: str) -> Optional[dict]:
         """Given a STEP 1 draft shown to the user, extract the action JSON via a targeted call."""
@@ -189,8 +222,16 @@ class StarfireBrain:
     def append_to_history(
         self, history: list[dict], user_msg: str, assistant_msg: str
     ) -> list[dict]:
-        """Append a user/assistant exchange to conversation history."""
+        """
+        Append a user/assistant exchange to conversation history.
+
+        Never stores empty content — an empty assistant turn (e.g. from a failed
+        think() that returns raw="") would 400 the Anthropic API on the next
+        call and poison the whole conversation.
+        """
         history = list(history)
-        history.append({"role": "user", "content": user_msg})
-        history.append({"role": "assistant", "content": assistant_msg})
+        if user_msg and user_msg.strip():
+            history.append({"role": "user", "content": user_msg})
+        if assistant_msg and assistant_msg.strip():
+            history.append({"role": "assistant", "content": assistant_msg})
         return history

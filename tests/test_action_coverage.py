@@ -56,7 +56,8 @@ def test_new_features_are_wired():
     """Lock in this session's features so they can't silently regress."""
     handled = _handled_actions()
     for action in ("WATCH_EMAIL", "START_WORK", "COMPUTE_MATH", "UNDO",
-                   "GET_DAILY_FOCUS", "ANALYZE_DECISION"):
+                   "GET_DAILY_FOCUS", "ANALYZE_DECISION", "BATCH",
+                   "DELETE_EMAILS"):
         assert action in handled, f"{action} lost its handler"
 
 
@@ -93,6 +94,38 @@ def test_plain_chat_is_not_an_action(brain):
 def test_non_action_json_is_chat(brain):
     r = brain._parse_response('{"name": "John", "age": 30}')
     assert r["type"] == "chat"
+
+
+# ── History sanitization (the poison-pill that broke "archive everything") ────
+
+def test_trim_history_drops_empty_messages(brain):
+    """An empty assistant turn must be stripped — it 400s the API otherwise."""
+    history = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": ""},        # poison from a failed think()
+        {"role": "user", "content": "archive everything"},
+    ]
+    clean = brain._trim_history(history)
+    assert all(m["content"].strip() for m in clean), "empty content survived"
+    assert clean[0]["role"] == "user"
+
+
+def test_trim_history_collapses_consecutive_roles(brain):
+    history = [
+        {"role": "user", "content": "a"},
+        {"role": "user", "content": "b"},           # two users in a row
+        {"role": "assistant", "content": "c"},
+    ]
+    clean = brain._trim_history(history)
+    roles = [m["role"] for m in clean]
+    assert roles == ["user", "assistant"]
+    assert clean[0]["content"] == "b"  # keeps the newer same-role message
+
+
+def test_append_to_history_skips_empty_assistant(brain):
+    out = brain.append_to_history([], "do the thing", "")
+    assert all(m["content"].strip() for m in out)
+    assert [m["role"] for m in out] == ["user"]
 
 
 # ── 3. Pure-logic regressions ────────────────────────────────────────────────

@@ -148,6 +148,25 @@ class DecisionEngine:
         if action_type == "NOTIFY":
             return action.get("message", "")
 
+        # ── BATCH — execute multiple actions from one request ────────────
+        if action_type == "BATCH":
+            steps = action.get("steps") or action.get("actions") or []
+            if not steps:
+                return "Nothing to do."
+            replies = []
+            for i, step in enumerate(steps, 1):
+                if not isinstance(step, dict) or "action" not in step:
+                    continue
+                if step.get("action") == "BATCH":  # no nested batches
+                    continue
+                try:
+                    r = await self._handle_action(user, step, history, context, attachments=attachments)
+                    replies.append(f"{i}. {r}")
+                except Exception as e:
+                    logger.error("batch_step_error", step=step.get("action"), error=str(e))
+                    replies.append(f"{i}. ⚠️ {step.get('action')} failed: {e}")
+            return "\n\n".join(replies) if replies else "Nothing to do."
+
         # ── DIRECT BOT MESSAGING ────────────────────────────────────────
         if action_type == "MESSAGE_LUMISNOVA":
             return await self._message_lumisnova(user, action)
@@ -1035,6 +1054,21 @@ class DecisionEngine:
                 message_id = action.get("message_id", "")
                 ok = gmail.delete_email(message_id) if message_id else False
                 return "Moved to trash ✓" if ok else "Couldn't delete — check the message ID."
+
+            if action_type == "DELETE_EMAILS":
+                # Bulk delete by Gmail query (e.g. from:sender). Moves to trash
+                # (recoverable for 30 days), not permanent delete.
+                query = action.get("query", "").strip()
+                if not query:
+                    return "Need a search query to delete by (e.g. from:sender)."
+                max_n = int(action.get("max", 200))
+                matches = gmail.search(query, max_results=max_n)
+                ids = [m["id"] for m in matches if m.get("id")]
+                if not ids:
+                    return f"No emails matched `{query}` — nothing deleted."
+                result = gmail.batch_trash(ids)
+                trashed = result.get("trashed", len(ids)) if isinstance(result, dict) else len(ids)
+                return f"Moved {trashed} email(s) matching `{query}` to trash ✓"
 
             if action_type == "MARK_READ":
                 message_id = action.get("message_id", "")
