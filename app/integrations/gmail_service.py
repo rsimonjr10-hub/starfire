@@ -10,6 +10,21 @@ from datetime import datetime, timedelta, timezone
 
 logger = structlog.get_logger(__name__)
 
+
+def _is_auth_error(e: Exception) -> bool:
+    """True when the exception means Google credentials are expired/revoked."""
+    msg = str(e).lower()
+    name = type(e).__name__.lower()
+    return (
+        "invalid_grant" in msg
+        or "token has been expired" in msg
+        or "token has been revoked" in msg
+        or "refresherror" in name
+        or "insufficient authentication scopes" in msg
+        or ("httperror" in name and ("401" in msg or "403" in msg))
+    )
+
+
 SCOPES = [
     "https://mail.google.com/",  # full Gmail access — required for batchDelete and batchModify
     "https://www.googleapis.com/auth/gmail.send",
@@ -134,7 +149,8 @@ class GmailService:
             return []
 
     def search_ids(self, query: str, max_results: int = 5000) -> list[str]:
-        """Paginated bulk ID lookup — no per-message fetches. Fast path for bulk ops."""
+        """Paginated bulk ID lookup — no per-message fetches. Fast path for bulk ops.
+        Re-raises auth errors so the caller can surface /connect_google to the user."""
         try:
             ids: list[str] = []
             page_token = None
@@ -151,6 +167,8 @@ class GmailService:
                     break
             return ids
         except Exception as e:
+            if _is_auth_error(e):
+                raise  # propagate so _handle_google_action shows /connect_google
             logger.error("gmail_search_ids_error", query=query, error=str(e))
             return []
 
@@ -361,8 +379,10 @@ class GmailService:
             ).execute()
             return True
         except Exception as e:
+            if _is_auth_error(e):
+                raise  # let _handle_google_action show /connect_google
             logger.error("gmail_archive_error", error=str(e))
-            raise
+            return False
 
     def delete_email(self, message_id: str) -> bool:
         try:
@@ -472,6 +492,8 @@ class GmailService:
                     break
             return ids
         except Exception as e:
+            if _is_auth_error(e):
+                raise
             logger.error("gmail_list_category_error", category=category, error=str(e))
             return []
 
@@ -493,7 +515,7 @@ class GmailService:
         return {"deleted": deleted, "errors": errors}
 
     def batch_trash(self, message_ids: list[str]) -> dict:
-        """Move multiple messages to trash (recoverable). Use for promotions."""
+        """Move multiple messages to trash (recoverable). Re-raises auth errors."""
         if not message_ids:
             return {"trashed": 0, "errors": 0}
         trashed, errors = 0, 0
@@ -506,12 +528,14 @@ class GmailService:
                 ).execute()
                 trashed += len(chunk)
             except Exception as e:
+                if _is_auth_error(e):
+                    raise
                 logger.error("gmail_batch_trash_error", chunk_size=len(chunk), error=str(e))
                 errors += len(chunk)
         return {"trashed": trashed, "errors": errors}
 
     def batch_archive(self, message_ids: list[str]) -> dict:
-        """Archive multiple messages — removes INBOX label, keeps in All Mail."""
+        """Archive multiple messages — removes INBOX label. Re-raises auth errors."""
         if not message_ids:
             return {"archived": 0, "errors": 0}
         archived, errors = 0, 0
@@ -524,6 +548,8 @@ class GmailService:
                 ).execute()
                 archived += len(chunk)
             except Exception as e:
+                if _is_auth_error(e):
+                    raise
                 logger.error("gmail_batch_archive_error", chunk_size=len(chunk), error=str(e))
                 errors += len(chunk)
         return {"archived": archived, "errors": errors}

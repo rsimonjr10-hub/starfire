@@ -133,17 +133,29 @@ class DecisionEngine:
                 action = await self.brain.extract_action_from_draft(draft)
                 if action and "action" in action:
                     logger.info("action_extracted_from_draft", action=action.get("action"))
-                    reply = await self._handle_action(user, action, history, context, attachments=attachments)
+                    try:
+                        reply = await self._handle_action(user, action, history, context, attachments=attachments)
+                    except Exception as e:
+                        reply = ("Google authorization expired. Use /connect_google to re-link."
+                                 if self._is_google_auth_error(e) else f"Action failed: {e}")
                     updated_history = self.brain.append_to_history(history, message, reply)
                     user.conversation_history = updated_history[-40:]
                     return reply
+                # Extraction failed — fall through to normal brain call
+                logger.warning("draft_extraction_failed", draft_preview=draft[:100])
 
         result = await self.brain.think(message, history, context)
 
         if result["type"] == "chat":
             reply = result["content"]
         else:
-            reply = await self._handle_action(user, result["content"], history, context, attachments=attachments)
+            try:
+                reply = await self._handle_action(user, result["content"], history, context, attachments=attachments)
+            except Exception as e:
+                if self._is_google_auth_error(e):
+                    reply = "Google authorization expired or was revoked. Use /connect_google to re-link your account."
+                else:
+                    raise
 
         updated_history = self.brain.append_to_history(history, message, result["raw"])
         user.conversation_history = updated_history[-40:]
