@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import structlog
@@ -59,28 +60,53 @@ class StarfireBrain:
             trimmed = trimmed[:-1]
         messages = trimmed + [{"role": "user", "content": user_message}]
 
-        try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=system,
-                messages=messages,
-            )
-            raw = response.content[0].text.strip()
-            return self._parse_response(raw)
-        except Exception as e:
-            logger.error("starfire_brain_error", error=str(e), error_type=type(e).__name__)
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
             try:
-                from app.monitoring.sentinel import sentinel
-                await sentinel.capture(e, category="brain.think",
-                                       context={"msg": user_message[:200]})
-            except Exception:
-                pass
-            return {
-                "type": "chat",
-                "content": "I encountered an issue processing that request. Please try again.",
-                "raw": "",
-            }
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=system,
+                    messages=messages,
+                )
+                raw = response.content[0].text.strip()
+                return self._parse_response(raw)
+            except Exception as e:
+                last_exc = e
+                err_type = type(e).__name__
+                err_str = str(e).lower()
+                logger.error("starfire_brain_error", attempt=attempt + 1,
+                             error=str(e), error_type=err_type)
+                # Retry once on transient server/rate errors; fail fast on auth/bad-request
+                _transient = (
+                    "ratelimit" in err_type.lower() or "rate_limit" in err_str or
+                    "overloaded" in err_str or "529" in str(e) or
+                    "timeout" in err_type.lower() or "timeout" in err_str or
+                    "serviceunavailable" in err_type.lower() or
+                    "internalserver" in err_type.lower()
+                )
+                if _transient and attempt == 0:
+                    logger.info("starfire_brain_retry", wait=8)
+                    await asyncio.sleep(8)
+                    continue
+                break
+
+        # Both attempts failed — alert admin immediately so we can see the real error
+        try:
+            from app.monitoring.sentinel import sentinel
+            err_type = type(last_exc).__name__
+            await sentinel._alert(
+                f"⚠️ <b>Brain error</b> — {err_type}\n"
+                f"<code>{str(last_exc)[:400]}</code>\n"
+                f"Msg: <code>{user_message[:100]}</code>"
+            )
+        except Exception:
+            pass
+        return {
+            "type": "chat",
+            "content": "I encountered an issue processing that request. Please try again.",
+            "raw": "",
+        }
 
     @staticmethod
     def _repair_json(s: str) -> str:
