@@ -133,6 +133,27 @@ class GmailService:
             logger.error("gmail_search_error", query=query, error=str(e))
             return []
 
+    def search_ids(self, query: str, max_results: int = 5000) -> list[str]:
+        """Paginated bulk ID lookup — no per-message fetches. Fast path for bulk ops."""
+        try:
+            ids: list[str] = []
+            page_token = None
+            while len(ids) < max_results:
+                batch = min(500, max_results - len(ids))
+                kwargs: dict = dict(userId="me", q=query, maxResults=batch)
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                res = self._svc.users().messages().list(**kwargs).execute()
+                for m in res.get("messages", []):
+                    ids.append(m["id"])
+                page_token = res.get("nextPageToken")
+                if not page_token:
+                    break
+            return ids
+        except Exception as e:
+            logger.error("gmail_search_ids_error", query=query, error=str(e))
+            return []
+
     def read_thread(self, thread_id: str) -> Optional[str]:
         try:
             thread = self._svc.users().threads().get(userId="me", id=thread_id, format="full").execute()
