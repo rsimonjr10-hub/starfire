@@ -117,6 +117,12 @@ class DecisionEngine:
     async def _process_message_inner(self, user: User, message: str, attachments: Optional[list] = None) -> str:
         context = await self._build_context(user)
         history = user.conversation_history or []
+        # Strip any malformed entries that slipped through before the poison-pill fix
+        history = [
+            m for m in history
+            if isinstance(m.get("content"), str) and m["content"].strip()
+            and m.get("role") in ("user", "assistant")
+        ]
 
         # Confirmation fast-path: if user says yes/go ahead and there's a pending draft,
         # extract the action directly instead of asking the brain again (which loops).
@@ -1071,14 +1077,13 @@ class DecisionEngine:
                 return "Archived ✓" if ok else "Couldn't archive — check the message ID."
 
             if action_type == "ARCHIVE_EMAILS":
-                # Bulk archive by Gmail query (e.g. from:sender, subject:topic).
-                # Removes from inbox, keeps in All Mail.
+                # Bulk archive by Gmail query. Uses paginated search_ids so ALL
+                # matching messages are fetched, not just the first page.
                 query = action.get("query", "").strip()
                 if not query:
                     return "Need a search query to archive by (e.g. from:sender)."
-                max_n = int(action.get("max", 200))
-                matches = gmail.search(query, max_results=max_n)
-                ids = [m["id"] for m in matches if m.get("id")]
+                max_n = int(action.get("max", 5000))
+                ids = gmail.search_ids(query, max_results=max_n)
                 if not ids:
                     return f"No emails matched `{query}` — nothing to archive."
                 result = gmail.batch_archive(ids)
@@ -1095,19 +1100,20 @@ class DecisionEngine:
                 return "Moved to trash ✓" if ok else "Couldn't delete — check the message ID."
 
             if action_type == "DELETE_EMAILS":
-                # Bulk delete by Gmail query (e.g. from:sender). Moves to trash
-                # (recoverable for 30 days), not permanent delete.
+                # Bulk delete (to trash). Uses paginated search_ids so ALL
+                # matching messages are fetched, not just the first page.
                 query = action.get("query", "").strip()
                 if not query:
                     return "Need a search query to delete by (e.g. from:sender)."
-                max_n = int(action.get("max", 200))
-                matches = gmail.search(query, max_results=max_n)
-                ids = [m["id"] for m in matches if m.get("id")]
+                max_n = int(action.get("max", 5000))
+                ids = gmail.search_ids(query, max_results=max_n)
                 if not ids:
                     return f"No emails matched `{query}` — nothing deleted."
                 result = gmail.batch_trash(ids)
                 trashed = result.get("trashed", len(ids)) if isinstance(result, dict) else len(ids)
-                return f"Moved {trashed} email(s) matching `{query}` to trash ✓"
+                errors = result.get("errors", 0) if isinstance(result, dict) else 0
+                suffix = f" ({errors} failed)" if errors else ""
+                return f"Moved {trashed} email(s) matching `{query}` to trash ✓{suffix}"
 
             if action_type == "MOVE_EMAILS":
                 # Move emails matching a query into a folder/label. "Move" =
@@ -1116,9 +1122,8 @@ class DecisionEngine:
                 to_folder = action.get("to_folder") or action.get("folder") or action.get("label")
                 if not query or not to_folder:
                     return "Tell me which emails (query) and the destination folder. e.g. move emails from Chase to a Bills label."
-                max_n = int(action.get("max", 200))
-                matches = gmail.search(query, max_results=max_n)
-                ids = [m["id"] for m in matches if m.get("id")]
+                max_n = int(action.get("max", 5000))
+                ids = gmail.search_ids(query, max_results=max_n)
                 if not ids:
                     return f"No emails matched `{query}` — nothing moved."
                 # Destination: resolve a system folder, else create the user label

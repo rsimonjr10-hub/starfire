@@ -50,9 +50,14 @@ class StarfireBrain:
         """
         system = self._build_system(context)
 
-        messages = self._trim_history(conversation_history) + [
-            {"role": "user", "content": user_message}
-        ]
+        trimmed = self._trim_history(conversation_history)
+        # If the history ends with a user message (because the previous assistant
+        # turn failed and was never stored), drop that trailing user entry so we
+        # don't send two consecutive user messages to the Anthropic API (which
+        # causes a 400 and re-enters this failure loop on every subsequent call).
+        if trimmed and trimmed[-1]["role"] == "user":
+            trimmed = trimmed[:-1]
+        messages = trimmed + [{"role": "user", "content": user_message}]
 
         try:
             response = await self.client.messages.create(
