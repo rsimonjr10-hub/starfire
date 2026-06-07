@@ -449,8 +449,10 @@ class GmailService:
             for lb in res.get("labels", []):
                 if lb["name"].lower() == f:
                     return lb["id"]
-        except Exception:
-            pass
+        except Exception as e:
+            if _is_auth_error(e):
+                raise  # propagate so caller surfaces /connect_google
+            logger.error("resolve_folder_error", folder=folder, error=str(e))
         return folder  # fall back to the raw value
 
     def list_in_folder(self, folder: str, max_results: int = 20) -> list[dict]:

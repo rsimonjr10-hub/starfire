@@ -155,7 +155,14 @@ class DecisionEngine:
                 if self._is_google_auth_error(e):
                     reply = "Google authorization expired or was revoked. Use /connect_google to re-link your account."
                 else:
-                    raise
+                    logger.error("handle_action_error",
+                                 action=result["content"].get("action"),
+                                 error=str(e), error_type=type(e).__name__)
+                    from app.monitoring.sentinel import sentinel
+                    await sentinel.capture(e, category="handle_action",
+                                           context={"action": result["content"].get("action")},
+                                           user_telegram_id=user.telegram_id)
+                    reply = f"I ran into an error executing that ({type(e).__name__}). I've flagged it — try again."
 
         updated_history = self.brain.append_to_history(history, message, result["raw"])
         user.conversation_history = updated_history[-40:]

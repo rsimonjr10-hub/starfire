@@ -100,8 +100,8 @@ class StarfireBrain:
                 f"<code>{str(last_exc)[:400]}</code>\n"
                 f"Msg: <code>{user_message[:100]}</code>"
             )
-        except Exception:
-            pass
+        except Exception as alert_err:
+            logger.error("sentinel_alert_failed", error=str(alert_err))
         return {
             "type": "chat",
             "content": "I encountered an issue processing that request. Please try again.",
