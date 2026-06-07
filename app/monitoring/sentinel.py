@@ -17,10 +17,19 @@ from typing import Optional, Callable, Awaitable
 
 logger = structlog.get_logger(__name__)
 
-# How many errors of the same category in WINDOW seconds before alerting
+# How many errors of the same category in WINDOW seconds before alerting.
+# Critical categories (user-visible failures) alert on the very first occurrence.
 _ERROR_THRESHOLD = 3
 _WINDOW_SECONDS = 300       # 5 minutes
 _ALERT_COOLDOWN = 1800      # 30 minutes between repeated alerts for same category
+
+# Categories where even ONE error should alert immediately (threshold=1).
+_CRITICAL_CATEGORIES = frozenset({
+    "brain.think",       # Anthropic API failure → user sees "I encountered an issue"
+    "google_auth",       # Expired/revoked Google token
+    "handle_action",     # Action executor crash
+    "process_message",   # Top-level message handler crash
+})
 
 
 class Sentinel:
@@ -91,7 +100,8 @@ class Sentinel:
 
         count = len(bucket)
         last = self._last_alert.get(category, 0)
-        if count >= _ERROR_THRESHOLD and (now - last) > _ALERT_COOLDOWN:
+        threshold = 1 if category in _CRITICAL_CATEGORIES else _ERROR_THRESHOLD
+        if count >= threshold and (now - last) > _ALERT_COOLDOWN:
             self._last_alert[category] = now
             tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-800:]
             msg = (

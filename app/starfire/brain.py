@@ -91,14 +91,13 @@ class StarfireBrain:
                     continue
                 break
 
-        # Both attempts failed — alert admin immediately so we can see the real error
+        # Both attempts failed — route through Sentinel so it can alert + track
         try:
             from app.monitoring.sentinel import sentinel
-            err_type = type(last_exc).__name__
-            await sentinel._alert(
-                f"⚠️ <b>Brain error</b> — {err_type}\n"
-                f"<code>{str(last_exc)[:400]}</code>\n"
-                f"Msg: <code>{user_message[:100]}</code>"
+            await sentinel.capture(
+                last_exc,
+                category="brain.think",   # critical category → alerts on first occurrence
+                context={"msg": user_message[:200], "attempts": 2},
             )
         except Exception as alert_err:
             logger.error("sentinel_alert_failed", error=str(alert_err))
