@@ -223,6 +223,82 @@ class DecisionEngine:
         if action_type in LUMISCAPITAL_ACTIONS:
             return await self._fetch_and_analyze(user, action, history, context)
 
+        # ── EMAIL WATCHES (DB-only — no Google auth required) ───────────
+        if action_type == "WATCH_EMAIL":
+            from app.models.email_watch import EmailWatch
+            description = action.get("description", action.get("query", "email"))
+            query = action.get("query", "")
+            if not query:
+                return "I need a search term to watch for — e.g. from:progressive.com or subject:policy."
+            on_match = (action.get("on_match") or "notify").lower()
+            if on_match not in ("notify", "archive", "label", "delete"):
+                on_match = "notify"
+            label_name = action.get("label_name")
+            if on_match == "label" and not label_name:
+                label_name = "STARFIRE"
+            watch = EmailWatch(
+                user_id=user.id,
+                description=description,
+                query=query,
+                on_match=on_match,
+                label_name=label_name,
+            )
+            self.db.add(watch)
+            await self.db.flush()
+            self._record_undo(user, "watch", watch.id, description)
+            await self.db.commit()
+            action_phrase = {
+                "notify": "I'll notify you the moment it hits your inbox.",
+                "archive": "I'll notify you and archive it automatically.",
+                "label": f"I'll notify you and label it '{label_name}'.",
+                "delete": "I'll notify you and move it to trash automatically.",
+            }[on_match]
+            return f"✅ Watching for: *{description}*\n{action_phrase}"
+
+        if action_type == "LIST_EMAIL_WATCHES":
+            from app.models.email_watch import EmailWatch
+            from sqlalchemy import select as sa_select
+            result = await self.db.execute(
+                sa_select(EmailWatch)
+                .where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+                .order_by(EmailWatch.created_at.desc())
+            )
+            watches = result.scalars().all()
+            if not watches:
+                return "No active email watches."
+            lines = ["*Active Email Watches*\n"]
+            for w in watches:
+                act = (w.on_match or "notify")
+                act_label = f" → {act}" if act != "notify" else ""
+                lines.append(f"• [{w.id}] *{w.description}*{act_label}\n  `{w.query}`")
+            return "\n".join(lines)
+
+        if action_type == "CANCEL_EMAIL_WATCH":
+            from app.models.email_watch import EmailWatch
+            from sqlalchemy import select as sa_select
+            watch_id = action.get("watch_id")
+            if watch_id:
+                result = await self.db.execute(
+                    sa_select(EmailWatch).where(
+                        EmailWatch.id == int(watch_id),
+                        EmailWatch.user_id == user.id,
+                    )
+                )
+                watch = result.scalar_one_or_none()
+                if watch:
+                    watch.is_active = False
+                    await self.db.commit()
+                    return f"Cancelled watch: *{watch.description}*"
+                return "Watch not found."
+            result = await self.db.execute(
+                sa_select(EmailWatch).where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+            )
+            watches = result.scalars().all()
+            for w in watches:
+                w.is_active = False
+            await self.db.commit()
+            return f"Cancelled {len(watches)} email watch(es)."
+
         # ── GOOGLE ──────────────────────────────────────────────────────
         if action_type in GOOGLE_ACTIONS:
             return await self._handle_google_action(user, action, history, context, attachments=attachments)
@@ -1267,82 +1343,6 @@ class DecisionEngine:
                 if total == 0:
                     return "Inbox is already clean — nothing to do."
                 return "\n".join(lines)
-
-            if action_type == "WATCH_EMAIL":
-                from app.models.email_watch import EmailWatch
-                description = action.get("description", action.get("query", "email"))
-                query = action.get("query", "")
-                if not query:
-                    return "I need a search term to watch for — e.g. from:chris@dealer.com or subject:quote."
-                on_match = (action.get("on_match") or "notify").lower()
-                if on_match not in ("notify", "archive", "label", "delete"):
-                    on_match = "notify"
-                label_name = action.get("label_name")
-                if on_match == "label" and not label_name:
-                    label_name = "STARFIRE"
-                watch = EmailWatch(
-                    user_id=user.id,
-                    description=description,
-                    query=query,
-                    on_match=on_match,
-                    label_name=label_name,
-                )
-                self.db.add(watch)
-                await self.db.flush()
-                self._record_undo(user, "watch", watch.id, description)
-                await self.db.commit()
-                action_phrase = {
-                    "notify": "I'll notify you the moment it hits your inbox.",
-                    "archive": "I'll notify you and archive it automatically.",
-                    "label": f"I'll notify you and label it '{label_name}'.",
-                    "delete": "I'll notify you and move it to trash automatically.",
-                }[on_match]
-                return f"Watching for: *{description}*\n{action_phrase}"
-
-            if action_type == "LIST_EMAIL_WATCHES":
-                from app.models.email_watch import EmailWatch
-                from sqlalchemy import select
-                result = await self.db.execute(
-                    select(EmailWatch)
-                    .where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
-                    .order_by(EmailWatch.created_at.desc())
-                )
-                watches = result.scalars().all()
-                if not watches:
-                    return "No active email watches."
-                lines = ["*Active Email Watches*\n"]
-                for w in watches:
-                    act = getattr(w, "on_match", "notify") or "notify"
-                    act_label = f" → {act}" if act != "notify" else ""
-                    lines.append(f"• [{w.id}] *{w.description}*{act_label}\n  `{w.query}`")
-                return "\n".join(lines)
-
-            if action_type == "CANCEL_EMAIL_WATCH":
-                from app.models.email_watch import EmailWatch
-                from sqlalchemy import select
-                watch_id = action.get("watch_id")
-                if watch_id:
-                    result = await self.db.execute(
-                        select(EmailWatch).where(
-                            EmailWatch.id == int(watch_id),
-                            EmailWatch.user_id == user.id,
-                        )
-                    )
-                    watch = result.scalar_one_or_none()
-                    if watch:
-                        watch.is_active = False
-                        await self.db.commit()
-                        return f"Cancelled watch: *{watch.description}*"
-                    return "Watch not found."
-                # cancel all
-                result = await self.db.execute(
-                    select(EmailWatch).where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
-                )
-                watches = result.scalars().all()
-                for w in watches:
-                    w.is_active = False
-                await self.db.commit()
-                return f"Cancelled {len(watches)} email watch(es)."
 
             if action_type == "SEARCH_DRIVE":
                 files = drive.search(action.get("query", ""))
