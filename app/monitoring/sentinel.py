@@ -36,6 +36,8 @@ class Sentinel:
     def __init__(self):
         self._counts: dict[str, deque] = defaultdict(deque)
         self._last_alert: dict[str, float] = {}
+        self._last_redeploy: dict[str, float] = {}
+        self._redeploy_task: Optional[asyncio.Task] = None
         self._sentry_enabled = False
         self._admin_telegram_id: Optional[int] = None
         self._initialized = False
@@ -112,9 +114,14 @@ class Sentinel:
             )
             await self._alert(msg, user_telegram_id)
 
-        # Auto-redeploy at double the threshold — escalate beyond in-process recovery
-        if count >= _ERROR_THRESHOLD * 2 and (now - last) > _ALERT_COOLDOWN:
-            asyncio.create_task(
+        # Auto-redeploy at double the threshold — escalate beyond in-process
+        # recovery. Tracked separately from _last_alert: the alert branch above
+        # updates _last_alert the moment the threshold is hit, which would make
+        # a shared cooldown check always-false right when errors are storming.
+        last_redeploy = self._last_redeploy.get(category, 0)
+        if count >= _ERROR_THRESHOLD * 2 and (now - last_redeploy) > _ALERT_COOLDOWN:
+            self._last_redeploy[category] = now
+            self._redeploy_task = asyncio.create_task(
                 self.self_redeploy(reason=f"{count} {category} errors in 5 min")
             )
 

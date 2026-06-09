@@ -870,15 +870,11 @@ class DecisionEngine:
             return "Market data unavailable. Check your FMP API key."
 
         formatted = self._format_lumiscapital_data(action_type, action, raw_data)
-        data_context = (context or "") + DATA_RESULT_TEMPLATE.format(
-            action=action_type, data=formatted[:2000],
+        narration = await self.brain.narrate(
+            "Give a concise market analysis and key takeaways on this data.", formatted
         )
-        analysis = await self.brain.think(
-            "You just fetched this data. Give a concise analysis and key takeaways.",
-            history, data_context,
-        )
-        if analysis["type"] == "chat" and analysis["content"].strip():
-            return formatted + "\n\n---\n" + analysis["content"]
+        if narration:
+            return formatted + "\n\n---\n" + narration
         return formatted
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
@@ -1056,18 +1052,16 @@ class DecisionEngine:
                 for i, m in enumerate(messages, 1):
                     lines.append(f"{i}. *{m.get('subject','(no subject)')}*\n   From: {m.get('from','')}\n   _{m.get('snippet','')[:100]}_")
                 formatted = "\n".join(lines)
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=formatted[:2000])
-                analysis = await self.brain.think("Summarize these emails, flag urgent items.", history, data_ctx)
-                return formatted + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
+                narration = await self.brain.narrate("Summarize these emails and flag urgent items.", formatted)
+                return formatted + (f"\n\n---\n{narration}" if narration else "")
 
             if action_type == "READ_EMAIL":
                 msg = gmail.read_message(action.get("message_id", ""))
                 if not msg:
                     return "Could not read that email."
                 text = f"*From:* {msg['from']}\n*Subject:* {msg['subject']}\n*Date:* {msg['date']}\n\n{msg['body']}"
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=text[:3000])
-                analysis = await self.brain.think("Summarize and suggest a response if appropriate.", history, data_ctx)
-                return text[:1500] + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
+                narration = await self.brain.narrate("Summarize this email and suggest a response if appropriate.", text)
+                return text[:1500] + (f"\n\n---\n{narration}" if narration else "")
 
             if action_type == "SEND_EMAIL":
                 to = action.get("to", "")
@@ -1357,9 +1351,8 @@ class DecisionEngine:
                 content = drive.read_doc(action.get("file_id", ""))
                 if not content:
                     return "Could not read document."
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=content[:3000])
-                analysis = await self.brain.think("Summarize this document.", history, data_ctx)
-                return analysis["content"] if analysis["type"] == "chat" else content[:2000]
+                narration = await self.brain.narrate("Summarize this document.", content)
+                return narration or content[:2000]
 
             if action_type == "CREATE_DOC":
                 link = drive.create_doc(action.get("title", "STARFIRE Doc"), action.get("content", ""))

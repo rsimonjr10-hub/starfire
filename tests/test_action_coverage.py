@@ -105,6 +105,60 @@ def test_non_action_json_is_chat(brain):
     assert r["type"] == "chat"
 
 
+# ── Tool-use extraction (native execute_action path) ─────────────────────────
+
+class _Block:
+    def __init__(self, type, **kw):
+        self.type = type
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def test_tool_use_block_becomes_action(brain):
+    blocks = [_Block("tool_use", name="execute_action",
+                     input={"action": "ARCHIVE_EMAILS", "query": "from:x"})]
+    r = brain._extract_from_blocks(blocks)
+    assert r["type"] == "action"
+    assert r["content"]["action"] == "ARCHIVE_EMAILS"
+    assert r["content"]["query"] == "from:x"
+
+
+def test_tool_use_preferred_over_text(brain):
+    blocks = [
+        _Block("text", text="On it."),
+        _Block("tool_use", name="execute_action", input={"action": "UNDO"}),
+    ]
+    r = brain._extract_from_blocks(blocks)
+    assert r["type"] == "action" and r["content"]["action"] == "UNDO"
+
+
+def test_text_only_blocks_fall_back_to_legacy_parsing(brain):
+    # legacy raw-JSON-in-text must still work during the transition
+    blocks = [_Block("text", text='{"action": "CREATE_TASK", "title": "x"}')]
+    r = brain._extract_from_blocks(blocks)
+    assert r["type"] == "action" and r["content"]["action"] == "CREATE_TASK"
+    blocks = [_Block("text", text="All quiet today — nothing urgent.")]
+    assert brain._extract_from_blocks(blocks)["type"] == "chat"
+
+
+def test_tool_use_without_action_field_is_ignored(brain):
+    blocks = [
+        _Block("tool_use", name="execute_action", input={"query": "x"}),  # malformed
+        _Block("text", text="Hmm."),
+    ]
+    assert brain._extract_from_blocks(blocks)["type"] == "chat"
+
+
+def test_system_prompt_static_block_first_for_caching(brain):
+    """Cache prefix rule: the big static prompt MUST be block 0 with
+    cache_control; volatile date/context comes after."""
+    system = brain._build_system("## ctx")
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    assert "STARFIRE" in system[0]["text"]
+    assert "Current Date & Time" in system[1]["text"]
+    assert "cache_control" not in system[1]
+
+
 # ── History sanitization (the poison-pill that broke "archive everything") ────
 
 def test_trim_history_drops_empty_messages(brain):
