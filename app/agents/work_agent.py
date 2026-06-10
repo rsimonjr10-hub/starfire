@@ -336,7 +336,7 @@ class WorkAgent(BaseAgent):
             from app.models.memory import UserMemory
             result = await db.execute(
                 select(UserMemory).where(UserMemory.user_id == user.id, UserMemory.is_active == True)
-                .order_by(UserMemory.importance.desc()).limit(10)
+                .order_by(UserMemory.importance.desc()).limit(20)
             )
             memories = result.scalars().all()
             if memories:

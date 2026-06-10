@@ -25,7 +25,7 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
         select(Task)
         .where(Task.user_id == user_id, Task.status == "PENDING", Task.due_at < now)
         .order_by(Task.priority.desc())
-        .limit(5)
+        .limit(10)
     )
     overdue = overdue_res.scalars().all()
 
@@ -38,7 +38,7 @@ async def compute_daily_focus(db: AsyncSession, user_id: int) -> dict:
             Task.due_at <= today_end,
         )
         .order_by(Task.priority.desc())
-        .limit(5)
+        .limit(10)
     )
     due_today = today_res.scalars().all()
 

@@ -1219,6 +1219,23 @@ class TelegramHandlers:
 
         await self._safe_reply(update, "\n".join(lines))
 
+    async def cmd_reset_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Clear conversation history — fixes 'I encountered an issue' loops."""
+        from app.database import AsyncSessionLocal
+        from app.models import User
+        from sqlalchemy import select as sa_select
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                sa_select(User).where(User.telegram_id == update.effective_user.id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                user.conversation_history = []
+                await session.commit()
+        await update.message.reply_text(
+            "✅ Conversation history cleared. You're starting fresh — I'm listening."
+        )
+
     async def cmd_undo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Reverse the last reversible action."""
         await self._run_brain(update, "undo that")

@@ -133,17 +133,36 @@ class DecisionEngine:
                 action = await self.brain.extract_action_from_draft(draft)
                 if action and "action" in action:
                     logger.info("action_extracted_from_draft", action=action.get("action"))
-                    reply = await self._handle_action(user, action, history, context, attachments=attachments)
+                    try:
+                        reply = await self._handle_action(user, action, history, context, attachments=attachments)
+                    except Exception as e:
+                        reply = ("Google authorization expired. Use /connect_google to re-link."
+                                 if self._is_google_auth_error(e) else f"Action failed: {e}")
                     updated_history = self.brain.append_to_history(history, message, reply)
                     user.conversation_history = updated_history[-40:]
                     return reply
+                # Extraction failed — fall through to normal brain call
+                logger.warning("draft_extraction_failed", draft_preview=draft[:100])
 
         result = await self.brain.think(message, history, context)
 
         if result["type"] == "chat":
             reply = result["content"]
         else:
-            reply = await self._handle_action(user, result["content"], history, context, attachments=attachments)
+            try:
+                reply = await self._handle_action(user, result["content"], history, context, attachments=attachments)
+            except Exception as e:
+                if self._is_google_auth_error(e):
+                    reply = "Google authorization expired or was revoked. Use /connect_google to re-link your account."
+                else:
+                    logger.error("handle_action_error",
+                                 action=result["content"].get("action"),
+                                 error=str(e), error_type=type(e).__name__)
+                    from app.monitoring.sentinel import sentinel
+                    await sentinel.capture(e, category="handle_action",
+                                           context={"action": result["content"].get("action")},
+                                           user_telegram_id=user.telegram_id)
+                    reply = f"I ran into an error executing that ({type(e).__name__}). I've flagged it — try again."
 
         updated_history = self.brain.append_to_history(history, message, result["raw"])
         user.conversation_history = updated_history[-40:]
@@ -203,6 +222,82 @@ class DecisionEngine:
         # ── MARKET DATA (direct FMP) ─────────────────────────────────────
         if action_type in LUMISCAPITAL_ACTIONS:
             return await self._fetch_and_analyze(user, action, history, context)
+
+        # ── EMAIL WATCHES (DB-only — no Google auth required) ───────────
+        if action_type == "WATCH_EMAIL":
+            from app.models.email_watch import EmailWatch
+            description = action.get("description", action.get("query", "email"))
+            query = action.get("query", "")
+            if not query:
+                return "I need a search term to watch for — e.g. from:progressive.com or subject:policy."
+            on_match = (action.get("on_match") or "notify").lower()
+            if on_match not in ("notify", "archive", "label", "delete"):
+                on_match = "notify"
+            label_name = action.get("label_name")
+            if on_match == "label" and not label_name:
+                label_name = "STARFIRE"
+            watch = EmailWatch(
+                user_id=user.id,
+                description=description,
+                query=query,
+                on_match=on_match,
+                label_name=label_name,
+            )
+            self.db.add(watch)
+            await self.db.flush()
+            self._record_undo(user, "watch", watch.id, description)
+            await self.db.commit()
+            action_phrase = {
+                "notify": "I'll notify you the moment it hits your inbox.",
+                "archive": "I'll notify you and archive it automatically.",
+                "label": f"I'll notify you and label it '{label_name}'.",
+                "delete": "I'll notify you and move it to trash automatically.",
+            }[on_match]
+            return f"✅ Watching for: *{description}*\n{action_phrase}"
+
+        if action_type == "LIST_EMAIL_WATCHES":
+            from app.models.email_watch import EmailWatch
+            from sqlalchemy import select as sa_select
+            result = await self.db.execute(
+                sa_select(EmailWatch)
+                .where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+                .order_by(EmailWatch.created_at.desc())
+            )
+            watches = result.scalars().all()
+            if not watches:
+                return "No active email watches."
+            lines = ["*Active Email Watches*\n"]
+            for w in watches:
+                act = (w.on_match or "notify")
+                act_label = f" → {act}" if act != "notify" else ""
+                lines.append(f"• [{w.id}] *{w.description}*{act_label}\n  `{w.query}`")
+            return "\n".join(lines)
+
+        if action_type == "CANCEL_EMAIL_WATCH":
+            from app.models.email_watch import EmailWatch
+            from sqlalchemy import select as sa_select
+            watch_id = action.get("watch_id")
+            if watch_id:
+                result = await self.db.execute(
+                    sa_select(EmailWatch).where(
+                        EmailWatch.id == int(watch_id),
+                        EmailWatch.user_id == user.id,
+                    )
+                )
+                watch = result.scalar_one_or_none()
+                if watch:
+                    watch.is_active = False
+                    await self.db.commit()
+                    return f"Cancelled watch: *{watch.description}*"
+                return "Watch not found."
+            result = await self.db.execute(
+                sa_select(EmailWatch).where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
+            )
+            watches = result.scalars().all()
+            for w in watches:
+                w.is_active = False
+            await self.db.commit()
+            return f"Cancelled {len(watches)} email watch(es)."
 
         # ── GOOGLE ──────────────────────────────────────────────────────
         if action_type in GOOGLE_ACTIONS:
@@ -775,15 +870,11 @@ class DecisionEngine:
             return "Market data unavailable. Check your FMP API key."
 
         formatted = self._format_lumiscapital_data(action_type, action, raw_data)
-        data_context = (context or "") + DATA_RESULT_TEMPLATE.format(
-            action=action_type, data=formatted[:2000],
+        narration = await self.brain.narrate(
+            "Give a concise market analysis and key takeaways on this data.", formatted
         )
-        analysis = await self.brain.think(
-            "You just fetched this data. Give a concise analysis and key takeaways.",
-            history, data_context,
-        )
-        if analysis["type"] == "chat" and analysis["content"].strip():
-            return formatted + "\n\n---\n" + analysis["content"]
+        if narration:
+            return formatted + "\n\n---\n" + narration
         return formatted
 
     async def _fetch_lumiscapital(self, action_type: str, action: dict):
@@ -961,18 +1052,16 @@ class DecisionEngine:
                 for i, m in enumerate(messages, 1):
                     lines.append(f"{i}. *{m.get('subject','(no subject)')}*\n   From: {m.get('from','')}\n   _{m.get('snippet','')[:100]}_")
                 formatted = "\n".join(lines)
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=formatted[:2000])
-                analysis = await self.brain.think("Summarize these emails, flag urgent items.", history, data_ctx)
-                return formatted + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
+                narration = await self.brain.narrate("Summarize these emails and flag urgent items.", formatted)
+                return formatted + (f"\n\n---\n{narration}" if narration else "")
 
             if action_type == "READ_EMAIL":
                 msg = gmail.read_message(action.get("message_id", ""))
                 if not msg:
                     return "Could not read that email."
                 text = f"*From:* {msg['from']}\n*Subject:* {msg['subject']}\n*Date:* {msg['date']}\n\n{msg['body']}"
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=text[:3000])
-                analysis = await self.brain.think("Summarize and suggest a response if appropriate.", history, data_ctx)
-                return text[:1500] + ("\n\n---\n" + analysis["content"] if analysis["type"] == "chat" and analysis["content"].strip() else "")
+                narration = await self.brain.narrate("Summarize this email and suggest a response if appropriate.", text)
+                return text[:1500] + (f"\n\n---\n{narration}" if narration else "")
 
             if action_type == "SEND_EMAIL":
                 to = action.get("to", "")
@@ -1249,82 +1338,6 @@ class DecisionEngine:
                     return "Inbox is already clean — nothing to do."
                 return "\n".join(lines)
 
-            if action_type == "WATCH_EMAIL":
-                from app.models.email_watch import EmailWatch
-                description = action.get("description", action.get("query", "email"))
-                query = action.get("query", "")
-                if not query:
-                    return "I need a search term to watch for — e.g. from:chris@dealer.com or subject:quote."
-                on_match = (action.get("on_match") or "notify").lower()
-                if on_match not in ("notify", "archive", "label", "delete"):
-                    on_match = "notify"
-                label_name = action.get("label_name")
-                if on_match == "label" and not label_name:
-                    label_name = "STARFIRE"
-                watch = EmailWatch(
-                    user_id=user.id,
-                    description=description,
-                    query=query,
-                    on_match=on_match,
-                    label_name=label_name,
-                )
-                self.db.add(watch)
-                await self.db.flush()
-                self._record_undo(user, "watch", watch.id, description)
-                await self.db.commit()
-                action_phrase = {
-                    "notify": "I'll notify you the moment it hits your inbox.",
-                    "archive": "I'll notify you and archive it automatically.",
-                    "label": f"I'll notify you and label it '{label_name}'.",
-                    "delete": "I'll notify you and move it to trash automatically.",
-                }[on_match]
-                return f"Watching for: *{description}*\n{action_phrase}"
-
-            if action_type == "LIST_EMAIL_WATCHES":
-                from app.models.email_watch import EmailWatch
-                from sqlalchemy import select
-                result = await self.db.execute(
-                    select(EmailWatch)
-                    .where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
-                    .order_by(EmailWatch.created_at.desc())
-                )
-                watches = result.scalars().all()
-                if not watches:
-                    return "No active email watches."
-                lines = ["*Active Email Watches*\n"]
-                for w in watches:
-                    act = getattr(w, "on_match", "notify") or "notify"
-                    act_label = f" → {act}" if act != "notify" else ""
-                    lines.append(f"• [{w.id}] *{w.description}*{act_label}\n  `{w.query}`")
-                return "\n".join(lines)
-
-            if action_type == "CANCEL_EMAIL_WATCH":
-                from app.models.email_watch import EmailWatch
-                from sqlalchemy import select
-                watch_id = action.get("watch_id")
-                if watch_id:
-                    result = await self.db.execute(
-                        select(EmailWatch).where(
-                            EmailWatch.id == int(watch_id),
-                            EmailWatch.user_id == user.id,
-                        )
-                    )
-                    watch = result.scalar_one_or_none()
-                    if watch:
-                        watch.is_active = False
-                        await self.db.commit()
-                        return f"Cancelled watch: *{watch.description}*"
-                    return "Watch not found."
-                # cancel all
-                result = await self.db.execute(
-                    select(EmailWatch).where(EmailWatch.user_id == user.id, EmailWatch.is_active == True)
-                )
-                watches = result.scalars().all()
-                for w in watches:
-                    w.is_active = False
-                await self.db.commit()
-                return f"Cancelled {len(watches)} email watch(es)."
-
             if action_type == "SEARCH_DRIVE":
                 files = drive.search(action.get("query", ""))
                 if not files:
@@ -1338,9 +1351,8 @@ class DecisionEngine:
                 content = drive.read_doc(action.get("file_id", ""))
                 if not content:
                     return "Could not read document."
-                data_ctx = (context or "") + DATA_RESULT_TEMPLATE.format(action=action_type, data=content[:3000])
-                analysis = await self.brain.think("Summarize this document.", history, data_ctx)
-                return analysis["content"] if analysis["type"] == "chat" else content[:2000]
+                narration = await self.brain.narrate("Summarize this document.", content)
+                return narration or content[:2000]
 
             if action_type == "CREATE_DOC":
                 link = drive.create_doc(action.get("title", "STARFIRE Doc"), action.get("content", ""))

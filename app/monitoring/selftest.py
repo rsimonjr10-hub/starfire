@@ -52,6 +52,7 @@ class SelfTest:
             ("service.focus_engine", self._check_focus_engine),
             ("service.bill_due_helper", self._check_bill_helper),
             ("logic.brain_json_parse", self._check_brain_parse),
+            ("logic.brain_tool_use", self._check_brain_tool_use),
             ("logic.math_engine", self._check_math_engine),
             ("logic.undo_recording", self._check_undo_recording),
             ("infra.worker_heartbeats", self._check_heartbeats),
@@ -187,6 +188,25 @@ class SelfTest:
         parsed = brain._parse_response(mixed)
         assert parsed["type"] == "action", f"expected action, got {parsed['type']}"
         assert parsed["content"]["action"] == "GET_EMAILS"
+
+    def _check_brain_tool_use(self):
+        """Native tool-use path: an execute_action block must become an action,
+        and the cached system prompt must keep its static-block-first order."""
+        from app.starfire.brain import StarfireBrain
+        brain = StarfireBrain.__new__(StarfireBrain)  # no API client needed
+
+        class _B:
+            type = "tool_use"
+            name = "execute_action"
+            input = {"action": "GET_EMAILS", "query": "is:unread"}
+
+        parsed = brain._extract_from_blocks([_B()])
+        assert parsed["type"] == "action", f"expected action, got {parsed['type']}"
+        assert parsed["content"]["action"] == "GET_EMAILS"
+
+        system = brain._build_system("ctx")
+        assert system[0].get("cache_control"), "static prompt lost its cache breakpoint"
+        assert "Current Date" in system[1]["text"], "date block must stay AFTER the cached prefix"
 
     def _check_math_engine(self):
         from app.agents.work_agent import compute_math

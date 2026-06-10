@@ -65,3 +65,31 @@ Priority: **P0** ship now · **P1** soon · **P2** nice-to-have
 ### Performance
 - **[P2] Batch `focus_engine` queries.** It issues several sequential queries
   per user; combine where possible for the 7am broadcast at scale.
+
+## 2026-06-09 — Architecture review (critical audit)
+
+### Reliability
+- **[P0] Migrate brain from "emit raw JSON" to native Anthropic tool use.**
+  Eliminates the entire _parse_response / _repair_json / brace-walking layer
+  and the JSON-leak + fake-success bug class. Each action becomes a tool
+  schema; unhandled actions become impossible at the API level.
+- **[P0] Fix dead auto-redeploy in sentinel.capture().** The redeploy branch
+  reuses `_last_alert`, which the alert branch just set — condition can never
+  be true. Needs a separate `_last_redeploy` tracker.
+- **[P1] Replace draft re-extraction with a stashed pending action.** Store
+  the action dict in `user.preferences["pending_action"]` when a STEP-1 draft
+  is shown; execute it directly on confirmation. Removes a fragile Haiku call.
+
+### Cost / latency
+- **[P0] Prompt caching.** Upgrade `anthropic` (0.28.0 → current), reorder
+  system blocks so the static 9.3k-token prompt comes FIRST (date block last),
+  add `cache_control`. ~90% input-token cut on the static prefix.
+- **[P1] Narration discipline.** GET_EMAILS/READ_EMAIL/_fetch_and_analyze make
+  a second full-system brain call to narrate results. Use Haiku with a tiny
+  system prompt for narration, or skip when the formatted payload suffices.
+- **[P2] Lazy context build.** `_build_context` runs ~8 queries on every
+  message regardless of relevance.
+
+### Maintainability
+- **[P2] Dispatch registry.** Replace the 2,500-line if-elif chain in
+  decision.py with an action→handler dict; coverage test derives from it.

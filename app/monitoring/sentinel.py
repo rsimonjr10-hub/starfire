@@ -17,16 +17,27 @@ from typing import Optional, Callable, Awaitable
 
 logger = structlog.get_logger(__name__)
 
-# How many errors of the same category in WINDOW seconds before alerting
+# How many errors of the same category in WINDOW seconds before alerting.
+# Critical categories (user-visible failures) alert on the very first occurrence.
 _ERROR_THRESHOLD = 3
 _WINDOW_SECONDS = 300       # 5 minutes
 _ALERT_COOLDOWN = 1800      # 30 minutes between repeated alerts for same category
+
+# Categories where even ONE error should alert immediately (threshold=1).
+_CRITICAL_CATEGORIES = frozenset({
+    "brain.think",       # Anthropic API failure → user sees "I encountered an issue"
+    "google_auth",       # Expired/revoked Google token
+    "handle_action",     # Action executor crash
+    "process_message",   # Top-level message handler crash
+})
 
 
 class Sentinel:
     def __init__(self):
         self._counts: dict[str, deque] = defaultdict(deque)
         self._last_alert: dict[str, float] = {}
+        self._last_redeploy: dict[str, float] = {}
+        self._redeploy_task: Optional[asyncio.Task] = None
         self._sentry_enabled = False
         self._admin_telegram_id: Optional[int] = None
         self._initialized = False
@@ -91,7 +102,8 @@ class Sentinel:
 
         count = len(bucket)
         last = self._last_alert.get(category, 0)
-        if count >= _ERROR_THRESHOLD and (now - last) > _ALERT_COOLDOWN:
+        threshold = 1 if category in _CRITICAL_CATEGORIES else _ERROR_THRESHOLD
+        if count >= threshold and (now - last) > _ALERT_COOLDOWN:
             self._last_alert[category] = now
             tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-800:]
             msg = (
@@ -102,9 +114,14 @@ class Sentinel:
             )
             await self._alert(msg, user_telegram_id)
 
-        # Auto-redeploy at double the threshold — escalate beyond in-process recovery
-        if count >= _ERROR_THRESHOLD * 2 and (now - last) > _ALERT_COOLDOWN:
-            asyncio.create_task(
+        # Auto-redeploy at double the threshold — escalate beyond in-process
+        # recovery. Tracked separately from _last_alert: the alert branch above
+        # updates _last_alert the moment the threshold is hit, which would make
+        # a shared cooldown check always-false right when errors are storming.
+        last_redeploy = self._last_redeploy.get(category, 0)
+        if count >= _ERROR_THRESHOLD * 2 and (now - last_redeploy) > _ALERT_COOLDOWN:
+            self._last_redeploy[category] = now
+            self._redeploy_task = asyncio.create_task(
                 self.self_redeploy(reason=f"{count} {category} errors in 5 min")
             )
 
