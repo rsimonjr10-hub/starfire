@@ -13,6 +13,19 @@ logger = structlog.get_logger(__name__)
 
 MAX_HISTORY_MESSAGES = 20
 
+
+def _is_billing_error(e: Exception) -> bool:
+    """True when the Anthropic API rejected the call for billing/credit reasons.
+    Not transient and not a code bug — retrying is pointless; the operator must
+    add credits. Detected so the user/admin sees the real cause instead of the
+    generic failure message."""
+    msg = str(e).lower()
+    return (
+        "credit balance is too low" in msg
+        or "billing" in msg
+        or ("organization" in msg and "disabled" in msg)
+    )
+
 # Native tool-use entry point for actions. Calling this tool is the only way
 # the model can act, which makes malformed action JSON and "fake success"
 # replies (claiming an action ran without executing it) structurally
@@ -118,6 +131,8 @@ class StarfireBrain:
                 err_str = str(e).lower()
                 logger.error("starfire_brain_error", attempt=attempt + 1,
                              error=str(e), error_type=err_type)
+                if _is_billing_error(e):
+                    break  # not transient and not a code bug — surface it clearly
                 # Retry once on transient server/rate errors; fail fast on auth/bad-request
                 _transient = (
                     "ratelimit" in err_type.lower() or "rate_limit" in err_str or
@@ -133,15 +148,27 @@ class StarfireBrain:
                 break
 
         # Both attempts failed — route through Sentinel so it can alert + track
+        billing = last_exc is not None and _is_billing_error(last_exc)
         try:
             from app.monitoring.sentinel import sentinel
             await sentinel.capture(
                 last_exc,
-                category="brain.think",   # critical category → alerts on first occurrence
+                category="brain.billing" if billing else "brain.think",
                 context={"msg": user_message[:200], "attempts": 2},
             )
         except Exception as alert_err:
             logger.error("sentinel_alert_failed", error=str(alert_err))
+        if billing:
+            return {
+                "type": "chat",
+                "content": (
+                    "⛽ I'm out of fuel — the Anthropic API credit balance is "
+                    "exhausted, so I can't think right now. Top up at "
+                    "console.anthropic.com → Plans & Billing and I'll be back "
+                    "instantly (no redeploy needed)."
+                ),
+                "raw": "",
+            }
         return {
             "type": "chat",
             "content": "I encountered an issue processing that request. Please try again.",

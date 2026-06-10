@@ -215,3 +215,23 @@ def test_bill_due_soon_today_and_future():
     now = datetime.now(timezone.utc)
     assert _bill_due_soon(B(due_day=now.day), now, window_days=1) is True
     assert _bill_due_soon(B(is_recurring=False, due_date=now + timedelta(days=30)), now) is False
+
+
+# ── Billing-error detection (out-of-credits must not look like a code bug) ────
+
+def test_billing_error_detected():
+    from app.starfire.brain import _is_billing_error
+    e = Exception(
+        "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
+        "'message': 'Your credit balance is too low to access the Anthropic API. "
+        "Go to Plans & Billing to upgrade or purchase credits.'}}"
+    )
+    assert _is_billing_error(e) is True
+    assert _is_billing_error(Exception("overloaded_error: 529")) is False
+    assert _is_billing_error(Exception("rate_limit_error")) is False
+
+
+def test_billing_category_is_critical_and_never_redeploys():
+    from app.monitoring.sentinel import _CRITICAL_CATEGORIES, _NO_REDEPLOY_CATEGORIES
+    assert "brain.billing" in _CRITICAL_CATEGORIES
+    assert "brain.billing" in _NO_REDEPLOY_CATEGORIES

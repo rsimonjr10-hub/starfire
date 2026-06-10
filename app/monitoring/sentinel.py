@@ -26,9 +26,15 @@ _ALERT_COOLDOWN = 1800      # 30 minutes between repeated alerts for same catego
 # Categories where even ONE error should alert immediately (threshold=1).
 _CRITICAL_CATEGORIES = frozenset({
     "brain.think",       # Anthropic API failure → user sees "I encountered an issue"
+    "brain.billing",     # API credit balance exhausted — operator must top up
     "google_auth",       # Expired/revoked Google token
     "handle_action",     # Action executor crash
     "process_message",   # Top-level message handler crash
+})
+
+# Categories a redeploy cannot fix — never escalate these to self_redeploy.
+_NO_REDEPLOY_CATEGORIES = frozenset({
+    "brain.billing",     # out of API credits; restarting changes nothing
 })
 
 
@@ -105,13 +111,22 @@ class Sentinel:
         threshold = 1 if category in _CRITICAL_CATEGORIES else _ERROR_THRESHOLD
         if count >= threshold and (now - last) > _ALERT_COOLDOWN:
             self._last_alert[category] = now
-            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-800:]
-            msg = (
-                f"⚠️ <b>STARFIRE Sentinel Alert</b>\n"
-                f"Category: <code>{category}</code>\n"
-                f"Errors in last 5 min: {count}\n\n"
-                f"<pre>{tb}</pre>"
-            )
+            if category == "brain.billing":
+                msg = (
+                    "💳 <b>STARFIRE — API credits exhausted</b>\n"
+                    "The Anthropic API rejected the call: credit balance too low. "
+                    "STARFIRE cannot think until you top up.\n\n"
+                    "Fix: console.anthropic.com → Plans &amp; Billing → add credits. "
+                    "No redeploy needed — it recovers on the next message."
+                )
+            else:
+                tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-800:]
+                msg = (
+                    f"⚠️ <b>STARFIRE Sentinel Alert</b>\n"
+                    f"Category: <code>{category}</code>\n"
+                    f"Errors in last 5 min: {count}\n\n"
+                    f"<pre>{tb}</pre>"
+                )
             await self._alert(msg, user_telegram_id)
 
         # Auto-redeploy at double the threshold — escalate beyond in-process
@@ -119,7 +134,9 @@ class Sentinel:
         # updates _last_alert the moment the threshold is hit, which would make
         # a shared cooldown check always-false right when errors are storming.
         last_redeploy = self._last_redeploy.get(category, 0)
-        if count >= _ERROR_THRESHOLD * 2 and (now - last_redeploy) > _ALERT_COOLDOWN:
+        if (category not in _NO_REDEPLOY_CATEGORIES
+                and count >= _ERROR_THRESHOLD * 2
+                and (now - last_redeploy) > _ALERT_COOLDOWN):
             self._last_redeploy[category] = now
             self._redeploy_task = asyncio.create_task(
                 self.self_redeploy(reason=f"{count} {category} errors in 5 min")
