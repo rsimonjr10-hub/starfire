@@ -57,45 +57,10 @@ class AutomationWorker:
                                         count=len(fired),
                                         names=[f["automation"] for f in fired])
 
-                        # Proactive idle nudge: if silent for 8+ hours during business hours
-                        await self._maybe_nudge(session, user_fresh, now)
-
                         # Email watches: check Gmail for pending watches
                         await self._check_email_watches(session, user_fresh, now)
             except Exception as e:
                 await sentinel.capture(e, category="automation_worker.user", context={"user_id": user.id})
-
-    async def _maybe_nudge(self, session, user, now: datetime) -> None:
-        """Send a proactive check-in if the user has been silent for 8+ business hours."""
-        if not user.updated_at:
-            return
-        last_active = user.updated_at.replace(tzinfo=timezone.utc) if user.updated_at.tzinfo is None else user.updated_at
-        hours_idle = (now - last_active).total_seconds() / 3600
-        if hours_idle < 8:
-            return
-
-        # Only nudge during business hours (9am–6pm ET = 13–22 UTC)
-        if not (13 <= now.hour <= 22):
-            return
-
-        # Max one nudge per calendar day (stored in user preferences)
-        today_str = now.strftime("%Y-%m-%d")
-        prefs = user.preferences or {}
-        if prefs.get("last_idle_nudge") == today_str:
-            return
-
-        try:
-            await send_notification(
-                user.telegram_id,
-                "I've been quiet for a while. What's on your plate? "
-                "I can check your tasks, inbox, pull data, or draft something — just say the word.",
-            )
-            prefs["last_idle_nudge"] = today_str
-            user.preferences = prefs
-            await session.commit()
-            logger.info("idle_nudge_sent", user_id=user.id)
-        except Exception as e:
-            await sentinel.capture(e, category="automation_worker.idle_nudge", context={"user_id": user.id})
 
     async def _check_email_watches(self, session, user, now: datetime) -> None:
         """Poll Gmail for each active email watch; notify and deactivate on match."""
